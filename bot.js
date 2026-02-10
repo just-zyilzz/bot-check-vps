@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const si = require('systeminformation');
 const shell = require('shelljs');
 const fs = require('fs');
@@ -11,14 +11,126 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const VPS_IP = process.env.VPS_IP;
 const AUTHORIZED_USERS = [parseInt(process.env.AUTHORIZED_USER)]; // Load from env
 
-
 // App Directories
 const APPS_DIR = '/var/www';
 const NGINX_AVAILABLE = '/etc/nginx/sites-available';
 const NGINX_ENABLED = '/etc/nginx/sites-enabled';
 
-// Initialize Bot
+// --- WIZARD SCENE FOR DEPLOYMENT ---
+const deployWizard = new Scenes.WizardScene(
+    'deploy_wizard',
+    // Step 1: Ask for Repo URL
+    (ctx) => {
+        ctx.reply('🚀 *DEPLOYMENT WIZARD*\n\nSilakan kirimkan *Link Repository GitHub* Anda.\n(Contoh: https://github.com/user/my-app.git)', { parse_mode: 'Markdown' });
+        ctx.wizard.state.data = {};
+        return ctx.wizard.next();
+    },
+    // Step 2: Ask for App Name
+    (ctx) => {
+        if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan link valid.');
+        ctx.wizard.state.data.repo = ctx.message.text.trim();
+        
+        ctx.reply('📝 *Nama Aplikasi*\n\nBerikan nama untuk aplikasi ini (tanpa spasi).\n(Contoh: my-api)', { parse_mode: 'Markdown' });
+        return ctx.wizard.next();
+    },
+    // Step 3: Ask for Port
+    (ctx) => {
+        if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan nama valid.');
+        const name = ctx.message.text.trim().replace(/\s+/g, '-').toLowerCase();
+        
+        // Check if name exists
+        if (fs.existsSync(path.join(APPS_DIR, name))) {
+            ctx.reply(`⚠️ Aplikasi dengan nama *${name}* sudah ada! Silakan ulangi /deploy atau gunakan nama lain.`, { parse_mode: 'Markdown' });
+            return ctx.scene.leave();
+        }
+        
+        ctx.wizard.state.data.name = name;
+        
+        ctx.reply('🔌 *Port Aplikasi*\n\nDi port berapa aplikasi ini akan berjalan?\n(Contoh: 3000)', { parse_mode: 'Markdown' });
+        return ctx.wizard.next();
+    },
+    // Step 4: Execute Deployment
+    async (ctx) => {
+        if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan port valid.');
+        const port = parseInt(ctx.message.text.trim());
+        if (isNaN(port)) return ctx.reply('⚠️ Port harus berupa angka.');
+        
+        ctx.wizard.state.data.port = port;
+        const { repo, name } = ctx.wizard.state.data;
+        
+        // Start Deployment Process
+        await ctx.reply(`⚙️ *Memulai Deployment...*\n\n📦 App: ${name}\n🔗 Repo: ${repo}\n🔌 Port: ${port}`, { parse_mode: 'Markdown' });
+        
+        const appPath = path.join(APPS_DIR, name);
+        
+        try {
+            // 1. Clone
+            await ctx.reply('📥 Cloning repository...');
+            if (shell.exec(`git clone ${repo} ${appPath}`).code !== 0) throw new Error('Git clone failed');
+
+            // 2. Install Dependencies
+            await ctx.reply('📦 Installing dependencies...');
+            if (fs.existsSync(path.join(appPath, 'package.json'))) {
+                if (shell.exec(`cd ${appPath} && npm install`).code !== 0) throw new Error('NPM Install failed');
+            } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
+                if (shell.exec(`cd ${appPath} && pip install -r requirements.txt`).code !== 0) throw new Error('Pip Install failed');
+            }
+
+            // 3. Start PM2
+            await ctx.reply('🔥 Starting process...');
+            let script = 'index.js';
+            const pkgPath = path.join(appPath, 'package.json');
+            if (fs.existsSync(pkgPath)) {
+                const pkg = require(pkgPath);
+                script = pkg.main || 'index.js';
+                if (pkg.scripts && pkg.scripts.start) script = 'npm -- start';
+            }
+            
+            const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
+            if (shell.exec(startCmd).code !== 0) throw new Error('PM2 Start failed');
+            shell.exec('pm2 save');
+
+            // 4. Setup Nginx
+            await ctx.reply('🌐 Configuring Nginx...');
+            const nginxConfig = `
+server {
+    listen 80;
+    server_name ${name}.${VPS_IP}.nip.io;
+
+    location / {
+        proxy_pass http://localhost:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+`;
+            const configPath = path.join(NGINX_AVAILABLE, name);
+            fs.writeFileSync(configPath, nginxConfig);
+            shell.exec(`ln -s ${configPath} ${path.join(NGINX_ENABLED, name)}`);
+            shell.exec('sudo systemctl reload nginx');
+
+            await ctx.reply(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: http://${name}.${VPS_IP}.nip.io`, { parse_mode: 'Markdown' });
+            
+        } catch (err) {
+            console.error(err);
+            await ctx.reply(`❌ Deployment Failed:\n${err.message}`);
+            // Cleanup attempt
+            // shell.rm('-rf', appPath); 
+        }
+
+        return ctx.scene.leave();
+    }
+);
+
+const stage = new Scenes.Stage([deployWizard]);
 const bot = new Telegraf(BOT_TOKEN);
+
+// Use Session & Stage
+bot.use(session());
+bot.use(stage.middleware());
 
 // Middleware for Authorization
 const authMiddleware = (ctx, next) => {
@@ -63,13 +175,18 @@ Silakan pilih menu di bawah ini:`,
         {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
-                [Markup.button.callback('📊 Status VPS', 'status_vps'), Markup.button.callback('💻 CPU & RAM', 'status_resources')],
+                [Markup.button.callback('📊 Status VPS', 'status_vps'), Markup.button.callback('🚀 Deploy App', 'start_deploy')],
                 [Markup.button.callback('💾 Disk Space', 'status_disk'), Markup.button.callback('🌐 Network', 'status_net')],
                 [Markup.button.callback('ℹ️ System Info', 'status_sys'), Markup.button.callback('📂 List Apps', 'list_apps')],
-                [Markup.button.callback('❓ Help / Bantuan', 'help_msg')]
+                [Markup.button.callback('💻 CPU Details', 'status_resources'), Markup.button.callback('❓ Help', 'help_msg')]
             ])
         }
     );
+});
+
+// Trigger Deployment Wizard
+bot.action('start_deploy', (ctx) => {
+    ctx.scene.enter('deploy_wizard');
 });
 
 bot.command('help', (ctx) => {
