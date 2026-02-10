@@ -223,6 +223,7 @@ Silakan pilih menu di bawah ini:`,
                 [Markup.button.callback('🚀 Speedtest', 'speedtest_run'), Markup.button.callback('💾 Disk Space', 'status_disk')],
                 [Markup.button.callback('🌐 Network', 'status_net'), Markup.button.callback('ℹ️ System Info', 'status_sys')],
                 [Markup.button.callback('📂 List Apps', 'list_apps'), Markup.button.callback('🔐 Login Monitor', 'login_monitor')],
+                [Markup.button.callback('🛡️ Firewall', 'status_ufw'), Markup.button.callback('📜 SSL Manager', 'status_ssl')],
                 [Markup.button.callback('❓ Help', 'help_msg')]
             ])
         }
@@ -467,6 +468,87 @@ bot.action('login_monitor', async (ctx) => {
         console.error(err);
         ctx.reply('❌ Gagal mengambil data login monitor.');
     }
+});
+
+// --- Firewall (UFW) Action ---
+bot.action('status_ufw', async (ctx) => {
+    ctx.reply('🛡️ *FIREWALL (UFW) STATUS*\n\nMenganalisa aturan firewall...', { parse_mode: 'Markdown' });
+    
+    shell.exec('sudo ufw status numbered', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.reply(`❌ Gagal mengambil status UFW:\n${stderr}`);
+        
+        const msg = `🛡️ *FIREWALL (UFW) REPORT*
+
+\`\`\`
+${stdout.trim() || 'UFW is inactive'}
+\`\`\`
+
+*Commands:*
+- \`/allow <port>\` - Buka port
+- \`/deny <port>\` - Tutup port`;
+        
+        ctx.reply(msg, { parse_mode: 'Markdown' });
+    });
+});
+
+bot.command('allow', (ctx) => {
+    const port = ctx.message.text.split(' ')[1];
+    if (!port) return ctx.reply('⚠️ Masukkan port. Contoh: `/allow 8080`');
+    
+    ctx.reply(`🛡️ Mencoba membuka port *${port}*...`, { parse_mode: 'Markdown' });
+    if (shell.exec(`sudo ufw allow ${port}`).code === 0) {
+        ctx.reply(`✅ Port *${port}* berhasil dibuka!`, { parse_mode: 'Markdown' });
+    } else {
+        ctx.reply(`❌ Gagal membuka port *${port}*.`, { parse_mode: 'Markdown' });
+    }
+});
+
+bot.command('deny', (ctx) => {
+    const port = ctx.message.text.split(' ')[1];
+    if (!port) return ctx.reply('⚠️ Masukkan port. Contoh: `/deny 8080`');
+    
+    ctx.reply(`🛡️ Mencoba menutup port *${port}*...`, { parse_mode: 'Markdown' });
+    if (shell.exec(`sudo ufw deny ${port}`).code === 0) {
+        ctx.reply(`✅ Port *${port}* berhasil ditutup!`, { parse_mode: 'Markdown' });
+    } else {
+        ctx.reply(`❌ Gagal menutup port *${port}*.`, { parse_mode: 'Markdown' });
+    }
+});
+
+// --- SSL Manager (Certbot) Action ---
+bot.action('status_ssl', async (ctx) => {
+    ctx.reply('📜 *SSL MANAGER*\n\nMengecek sertifikat SSL...', { parse_mode: 'Markdown' });
+    
+    shell.exec('sudo certbot certificates', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) {
+            if (stderr.includes('not found')) {
+                return ctx.reply('❌ `certbot` belum terinstall di VPS.');
+            }
+            return ctx.reply(`❌ Gagal mengambil info SSL:\n${stderr}`);
+        }
+        
+        const msg = `📜 *SSL CERTIFICATES REPORT*
+
+\`\`\`
+${stdout.trim() || 'Tidak ada sertifikat ditemukan'}
+\`\`\`
+
+*Commands:*
+- \`/ssl_renew\` - Perbarui semua sertifikat`;
+        
+        ctx.reply(msg, { parse_mode: 'Markdown' });
+    });
+});
+
+bot.command('ssl_renew', (ctx) => {
+    ctx.reply('⏳ Memulai proses pembaruan SSL...', { parse_mode: 'Markdown' });
+    shell.exec('sudo certbot renew', { silent: true }, (code, stdout, stderr) => {
+        if (code === 0) {
+            ctx.reply(`✅ *SSL Renewed!*\n\n\`\`\`\n${stdout}\n\`\`\``, { parse_mode: 'Markdown' });
+        } else {
+            ctx.reply(`❌ Gagal memperbarui SSL:\n${stderr}`, { parse_mode: 'Markdown' });
+        }
+    });
 });
 
 bot.action('status_sys', async (ctx) => {
