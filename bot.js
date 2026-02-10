@@ -1,0 +1,495 @@
+require('dotenv').config();
+const { Telegraf, Markup } = require('telegraf');
+const si = require('systeminformation');
+const shell = require('shelljs');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
+
+// Configuration
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const VPS_IP = process.env.VPS_IP;
+const AUTHORIZED_USERS = [parseInt(process.env.AUTHORIZED_USER)]; // Load from env
+
+
+// App Directories
+const APPS_DIR = '/var/www';
+const NGINX_AVAILABLE = '/etc/nginx/sites-available';
+const NGINX_ENABLED = '/etc/nginx/sites-enabled';
+
+// Initialize Bot
+const bot = new Telegraf(BOT_TOKEN);
+
+// Middleware for Authorization
+const authMiddleware = (ctx, next) => {
+    const userId = ctx.from.id;
+    if (AUTHORIZED_USERS.includes(userId)) {
+        return next();
+    }
+    return ctx.reply('⛔ Unauthorized access. Please contact admin.');
+};
+
+bot.use(authMiddleware);
+
+// Helper Functions
+const formatBytes = (bytes, decimals = 2) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+};
+
+const getProgressBar = (percent, length = 10) => {
+    const filled = Math.round((percent / 100) * length);
+    const empty = length - filled;
+    return '█'.repeat(filled) + '░'.repeat(empty);
+};
+
+// --- Commands ---
+
+bot.start((ctx) => {
+    ctx.reply(
+        `🤖 *VPS Monitor & Deploy Bot*
+        
+Halo ${ctx.from.first_name}! 👋
+Panel kontrol VPS Anda siap digunakan.
+
+*IP Address:* \`${VPS_IP}\`
+*OS:* Linux (Detected)
+
+Silakan pilih menu di bawah ini:`,
+        {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('📊 Status VPS', 'status_vps'), Markup.button.callback('💻 CPU & RAM', 'status_resources')],
+                [Markup.button.callback('💾 Disk Space', 'status_disk'), Markup.button.callback('🌐 Network', 'status_net')],
+                [Markup.button.callback('ℹ️ System Info', 'status_sys'), Markup.button.callback('📂 List Apps', 'list_apps')],
+                [Markup.button.callback('❓ Help / Bantuan', 'help_msg')]
+            ])
+        }
+    );
+});
+
+bot.command('help', (ctx) => {
+    ctx.reply(
+        `📚 *Panduan Perintah*
+
+*Deployment:*
+\`/deploy <name> <repo_url> <port>\`
+Contoh:
+\`/deploy myapp https://github.com/user/repo.git 3000\`
+
+*Management:*
+\`/list\` - List semua aplikasi
+\`/stop <name>\` - Stop aplikasi
+\`/restart <name>\` - Restart aplikasi
+\`/delete <name>\` - Hapus aplikasi
+\`/logs <name> [lines]\` - Lihat log aplikasi
+
+*Monitoring:*
+Gunakan menu visual dengan /start`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+bot.action('help_msg', (ctx) => {
+    ctx.reply(
+        `📚 *Panduan Perintah*
+
+*Deployment:*
+\`/deploy <name> <repo_url> <port>\`
+Contoh:
+\`/deploy myapp https://github.com/user/repo.git 3000\`
+
+*Management:*
+\`/list\` - List semua aplikasi
+\`/stop <name>\` - Stop aplikasi
+\`/restart <name>\` - Restart aplikasi
+\`/delete <name>\` - Hapus aplikasi
+\`/logs <name> [lines]\` - Lihat log aplikasi
+
+*Monitoring:*
+Gunakan menu visual dengan /start`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// --- Monitoring Actions ---
+
+bot.action('status_vps', async (ctx) => {
+    try {
+        const cpu = await si.currentLoad();
+        const mem = await si.mem();
+        const disk = await si.fsSize();
+        
+        const mainDisk = disk[0]; // Assuming first disk is main
+        
+        ctx.reply(
+            `📊 *VPS Status Overview*
+
+*CPU Usage:* ${cpu.currentLoad.toFixed(1)}%
+${getProgressBar(cpu.currentLoad)}
+
+*Memory:* ${formatBytes(mem.active)} / ${formatBytes(mem.total)}
+${getProgressBar((mem.active / mem.total) * 100)}
+
+*Disk:* ${formatBytes(mainDisk.used)} / ${formatBytes(mainDisk.size)} (${mainDisk.use}%)
+${getProgressBar(mainDisk.use)}`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (e) {
+        console.error(e);
+        ctx.reply('❌ Gagal mengambil data status.');
+    }
+});
+
+bot.action('status_resources', async (ctx) => {
+    try {
+        const cpu = await si.cpu();
+        const mem = await si.mem();
+        const load = await si.currentLoad();
+
+        ctx.reply(
+            `💻 *Resource Detail*
+
+*CPU:*
+Model: ${cpu.manufacturer} ${cpu.brand}
+Cores: ${cpu.cores}
+Speed: ${cpu.speed} GHz
+Load: ${load.currentLoad.toFixed(1)}%
+
+*Memory:*
+Total: ${formatBytes(mem.total)}
+Free: ${formatBytes(mem.free)}
+Used: ${formatBytes(mem.used)}
+Active: ${formatBytes(mem.active)}
+Available: ${formatBytes(mem.available)}`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (e) {
+        ctx.reply('❌ Gagal mengambil data resource.');
+    }
+});
+
+bot.action('status_disk', async (ctx) => {
+    try {
+        const disks = await si.fsSize();
+        let msg = `💾 *Disk Usage*\n\n`;
+        
+        disks.forEach(d => {
+            msg += `*Mount:* \`${d.mount}\`\n`;
+            msg += `Type: ${d.type}\n`;
+            msg += `Size: ${formatBytes(d.size)}\n`;
+            msg += `Used: ${formatBytes(d.used)} (${d.use}%)\n`;
+            msg += `${getProgressBar(d.use)}\n\n`;
+        });
+        
+        ctx.reply(msg, { parse_mode: 'Markdown' });
+    } catch (e) {
+        ctx.reply('❌ Gagal mengambil data disk.');
+    }
+});
+
+bot.action('status_net', async (ctx) => {
+    try {
+        const netStats = await si.networkStats();
+        const iface = netStats[0]; // Primary interface
+        
+        ctx.reply(
+            `🌐 *Network Statistics*
+
+*Interface:* ${iface.iface}
+*State:* ${iface.operstate}
+
+*Traffic:*
+⬇️ RX: ${formatBytes(iface.rx_bytes)}
+⬆️ TX: ${formatBytes(iface.tx_bytes)}
+
+*Speed:*
+⬇️ Down: ${formatBytes(iface.rx_sec)}/s
+⬆️ Up: ${formatBytes(iface.tx_sec)}/s`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (e) {
+        ctx.reply('❌ Gagal mengambil data network.');
+    }
+});
+
+bot.action('status_sys', async (ctx) => {
+    try {
+        const os = await si.osInfo();
+        const time = await si.time();
+        
+        ctx.reply(
+            `ℹ️ *System Information*
+
+*Hostname:* ${os.hostname}
+*Platform:* ${os.platform}
+*Distro:* ${os.distro} ${os.release}
+*Kernel:* ${os.kernel}
+*Arch:* ${os.arch}
+
+*Uptime:* ${(time.uptime / 3600).toFixed(2)} hours
+*Time:* ${new Date(time.current).toLocaleString()}`,
+            { parse_mode: 'Markdown' }
+        );
+    } catch (e) {
+        ctx.reply('❌ Gagal mengambil system info.');
+    }
+});
+
+// --- Deployment & Management Commands ---
+
+bot.command('deploy', async (ctx) => {
+    const args = ctx.message.text.split(' ');
+    // /deploy <name> <repo> <port>
+    if (args.length !== 4) {
+        return ctx.reply('⚠️ Format salah!\nGunakan: `/deploy <name> <repo_url> <port>`', { parse_mode: 'Markdown' });
+    }
+
+    const [_, name, repo, port] = args;
+    const appPath = path.join(APPS_DIR, name);
+
+    ctx.reply(`🚀 Memulai deployment untuk *${name}*...\nRepo: ${repo}\nPort: ${port}`, { parse_mode: 'Markdown' });
+
+    try {
+        // 1. Check if app already exists
+        if (fs.existsSync(appPath)) {
+            return ctx.reply(`❌ Aplikasi ${name} sudah ada! Gunakan nama lain atau delete terlebih dahulu.`);
+        }
+
+        // 2. Clone Repo
+        ctx.reply('📥 Cloning repository...');
+        if (shell.exec(`git clone ${repo} ${appPath}`).code !== 0) {
+            throw new Error('Git clone failed');
+        }
+
+        // 3. Install Dependencies
+        ctx.reply('📦 Installing dependencies (ini mungkin memakan waktu)...');
+        // Detect package.json or requirements.txt
+        if (fs.existsSync(path.join(appPath, 'package.json'))) {
+            if (shell.exec(`cd ${appPath} && npm install`).code !== 0) {
+                throw new Error('NPM Install failed');
+            }
+        } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
+             if (shell.exec(`cd ${appPath} && pip install -r requirements.txt`).code !== 0) {
+                throw new Error('Pip Install failed');
+            }
+        }
+
+        // 4. Start with PM2
+        ctx.reply('🔥 Starting process with PM2...');
+        let script = 'index.js'; // Default
+        const pkgPath = path.join(appPath, 'package.json');
+        
+        if (fs.existsSync(pkgPath)) {
+            const pkg = require(pkgPath);
+            script = pkg.main || 'index.js';
+            if (pkg.scripts && pkg.scripts.start) {
+                // If it's a Next.js or complex app, use npm start
+                script = 'npm -- start';
+            }
+        }
+
+        // PM2 Command
+        const pm2Cmd = `pm2 start ${script} --name ${name} --cwd ${appPath} --port ${port}`;
+        // Note: passing port via env usually works better: PORT=3000 pm2 start ...
+        // Let's try to set PORT env
+        const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
+        
+        if (shell.exec(startCmd).code !== 0) {
+            throw new Error('PM2 Start failed');
+        }
+        shell.exec('pm2 save');
+
+        // 5. Setup Nginx (Reverse Proxy)
+        ctx.reply('🌐 Configuring Nginx...');
+        const nginxConfig = `
+server {
+    listen 80;
+    server_name ${name}.${VPS_IP}.nip.io;
+
+    location / {
+        proxy_pass http://localhost:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+`;
+        const configPath = path.join(NGINX_AVAILABLE, name);
+        fs.writeFileSync(configPath, nginxConfig); // Might need sudo
+        
+        // Enable site
+        shell.exec(`ln -s ${configPath} ${path.join(NGINX_ENABLED, name)}`);
+        
+        // Reload Nginx
+        if (shell.exec('sudo systemctl reload nginx').code !== 0) {
+            ctx.reply('⚠️ Gagal reload Nginx. Cek config manual.');
+        }
+
+        ctx.reply(`✅ *Deployment Berhasil!* 🎉\n\nApp: ${name}\nURL: http://${name}.${VPS_IP}.nip.io`, { parse_mode: 'Markdown' });
+
+    } catch (err) {
+        console.error(err);
+        ctx.reply(`❌ Deployment Gagal:\n${err.message}`);
+        // Cleanup if possible?
+    }
+});
+
+bot.command('list', (ctx) => {
+    shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.reply('❌ Gagal mengambil list PM2.');
+        
+        try {
+            const list = JSON.parse(stdout);
+            if (list.length === 0) return ctx.reply('📭 Tidak ada aplikasi yang berjalan.');
+            
+            let msg = '📋 *Active Applications:*\n\n';
+            list.forEach(proc => {
+                const status = proc.pm2_env.status === 'online' ? '🟢' : '🔴';
+                const memory = formatBytes(proc.monit.memory);
+                const cpu = proc.monit.cpu;
+                const uptime = ((Date.now() - proc.pm2_env.pm_uptime) / 3600000).toFixed(1) + 'h';
+                
+                msg += `${status} *${proc.name}* (ID: ${proc.pm_id})\n`;
+                msg += `   CPU: ${cpu}% | Mem: ${memory}\n`;
+                msg += `   Uptime: ${uptime} | Restarts: ${proc.pm2_env.restart_time}\n\n`;
+            });
+            
+            ctx.reply(msg, { parse_mode: 'Markdown' });
+        } catch (e) {
+            ctx.reply('❌ Error parsing PM2 data.');
+        }
+    });
+});
+
+bot.action('list_apps', (ctx) => {
+    // Reuse list logic or call command
+    shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.reply('❌ Gagal mengambil list PM2.');
+        
+        try {
+            const list = JSON.parse(stdout);
+            if (list.length === 0) return ctx.reply('📭 Tidak ada aplikasi yang berjalan.');
+            
+            let msg = '📋 *Active Applications:*\n\n';
+            list.forEach(proc => {
+                const status = proc.pm2_env.status === 'online' ? '🟢' : '🔴';
+                msg += `${status} *${proc.name}*\n`;
+            });
+            
+            ctx.reply(msg, { parse_mode: 'Markdown' });
+        } catch (e) {
+            ctx.reply('❌ Error parsing PM2 data.');
+        }
+    });
+});
+
+bot.command('stop', (ctx) => {
+    const name = ctx.message.text.split(' ')[1];
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/stop myapp`');
+    
+    if (shell.exec(`pm2 stop ${name}`).code === 0) {
+        ctx.reply(`✅ App *${name}* stopped.`, { parse_mode: 'Markdown' });
+    } else {
+        ctx.reply(`❌ Gagal stop app *${name}*.`, { parse_mode: 'Markdown' });
+    }
+});
+
+bot.command('restart', (ctx) => {
+    const name = ctx.message.text.split(' ')[1];
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/restart myapp`');
+    
+    if (shell.exec(`pm2 restart ${name}`).code === 0) {
+        ctx.reply(`✅ App *${name}* restarted.`, { parse_mode: 'Markdown' });
+    } else {
+        ctx.reply(`❌ Gagal restart app *${name}*.`, { parse_mode: 'Markdown' });
+    }
+});
+
+bot.command('delete', (ctx) => {
+    const name = ctx.message.text.split(' ')[1];
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/delete myapp`');
+    
+    ctx.reply(`🗑️ Menghapus aplikasi *${name}*...`, { parse_mode: 'Markdown' });
+    
+    // 1. PM2 Delete
+    shell.exec(`pm2 delete ${name}`);
+    shell.exec('pm2 save');
+    
+    // 2. Remove Nginx Config
+    const configPath = path.join(NGINX_AVAILABLE, name);
+    const enabledPath = path.join(NGINX_ENABLED, name);
+    if (fs.existsSync(configPath)) shell.rm(configPath);
+    if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
+    shell.exec('sudo systemctl reload nginx');
+    
+    // 3. Remove Files (Optional - maybe risky to auto delete files?)
+    // Let's keep files for safety or ask confirmation. 
+    // The requirement says "Hapus aplikasi", implies full cleanup.
+    const appPath = path.join(APPS_DIR, name);
+    if (fs.existsSync(appPath)) {
+        shell.rm('-rf', appPath);
+        ctx.reply(`✅ Folder aplikasi dihapus.`);
+    }
+    
+    ctx.reply(`✅ Aplikasi *${name}* berhasil dihapus dari PM2 dan Nginx.`, { parse_mode: 'Markdown' });
+});
+
+bot.command('logs', (ctx) => {
+    const args = ctx.message.text.split(' ');
+    const name = args[1];
+    const lines = args[2] || 50;
+    
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/logs myapp 20`');
+    
+    // PM2 logs are usually in ~/.pm2/logs/
+    // We can try to use pm2 logs command but it streams. 
+    // Better to read log file directly if we can find it.
+    // Or use `pm2 logs <name> --lines <lines> --nostream`
+    
+    shell.exec(`pm2 logs ${name} --lines ${lines} --nostream`, { silent: true }, (code, stdout, stderr) => {
+         // PM2 logs output is sometimes mixed. 
+         // Let's just try to read the log file path from pm2 jlist
+         
+         shell.exec(`pm2 jlist`, { silent: true }, (c, out, err) => {
+             try {
+                 const list = JSON.parse(out);
+                 const app = list.find(p => p.name === name);
+                 if (!app) return ctx.reply(`❌ App ${name} tidak ditemukan.`);
+                 
+                 const logFile = app.pm2_env.pm_out_log_path;
+                 const errFile = app.pm2_env.pm_err_log_path;
+                 
+                 // Read last N lines
+                 const logs = shell.tail({'-n': lines}, logFile);
+                 
+                 if (logs.length > 4000) {
+                     // Split if too long
+                     ctx.reply(`📜 *Logs for ${name} (truncated):*\n\n` + logs.substring(0, 4000), { parse_mode: 'Markdown' });
+                 } else {
+                     ctx.reply(`📜 *Logs for ${name}:*\n\n` + logs, { parse_mode: 'Markdown' });
+                 }
+                 
+             } catch (e) {
+                 ctx.reply('❌ Gagal mengambil logs.');
+             }
+         });
+    });
+});
+
+// Launch Bot
+bot.launch().then(() => {
+    console.log('🤖 Bot started!');
+}).catch((err) => {
+    console.error('❌ Bot failed to start', err);
+});
+
+// Graceful Stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
