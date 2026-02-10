@@ -220,9 +220,10 @@ Silakan pilih menu di bawah ini:`,
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
                 [Markup.button.callback('📊 Status VPS', 'status_vps'), Markup.button.callback('🚀 Deploy App', 'start_deploy')],
-                [Markup.button.callback('� Speedtest', 'speedtest_run'), Markup.button.callback('💾 Disk Space', 'status_disk')],
+                [Markup.button.callback('🚀 Speedtest', 'speedtest_run'), Markup.button.callback('💾 Disk Space', 'status_disk')],
                 [Markup.button.callback('🌐 Network', 'status_net'), Markup.button.callback('ℹ️ System Info', 'status_sys')],
-                [Markup.button.callback('� List Apps', 'list_apps'), Markup.button.callback('❓ Help', 'help_msg')]
+                [Markup.button.callback('📂 List Apps', 'list_apps'), Markup.button.callback('🔐 Login Monitor', 'login_monitor')],
+                [Markup.button.callback('❓ Help', 'help_msg')]
             ])
         }
     );
@@ -421,6 +422,51 @@ bot.action('speedtest_run', async (ctx) => {
             ctx.reply('❌ Gagal memproses hasil speedtest.');
         }
     });
+});
+
+bot.action('login_monitor', (ctx) => {
+    ctx.reply('🔐 *LOGIN MONITOR*\n\nSedang menganalisa login di VPS...', { parse_mode: 'Markdown' });
+
+    // Get active users
+    const activeUsers = shell.exec('who', { silent: true }).stdout.trim() || 'Tidak ada user aktif';
+    
+    // Get last logins
+    const lastLogins = shell.exec('last -n 10', { silent: true }).stdout.trim() || 'Tidak ada history';
+    
+    // Get failed logins (last 24 hours)
+    const failedLogins = shell.exec("grep 'Failed password' /var/log/auth.log | tail -20", { silent: true }).stdout.trim() || 'Tidak ada failed login';
+    
+    // Get successful logins (last 24 hours)
+    const successLogins = shell.exec("grep 'Accepted password' /var/log/auth.log | tail -10", { silent: true }).stdout.trim() || 'Tidak ada login sukses';
+
+    const message = `🔐 *LOGIN MONITOR REPORT*
+
+*👥 Active Users:*
+\`\`\`
+${activeUsers}
+\`\`\`
+
+*📜 Last 10 Logins:*
+\`\`\`
+${lastLogins}
+\`\`\`
+
+*❌ Failed Logins (Last 20):*
+\`\`\`
+${failedLogins}
+\`\`\`
+
+*✅ Successful Logins (Last 10):*
+\`\`\`
+${successLogins}
+\`\`\``;
+
+    // Split message if too long
+    if (message.length > 4000) {
+        ctx.reply(message.substring(0, 4000) + '\n... (pesan terpotong)', { parse_mode: 'Markdown' });
+    } else {
+        ctx.reply(message, { parse_mode: 'Markdown' });
+    }
 });
 
 bot.action('status_sys', async (ctx) => {
