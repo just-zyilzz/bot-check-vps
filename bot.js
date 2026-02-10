@@ -225,7 +225,7 @@ Silakan pilih menu di bawah ini:`,
                 [Markup.button.callback('📂 List Apps', 'list_apps'), Markup.button.callback('🔐 Login Monitor', 'login_monitor')],
                 [Markup.button.callback('🛡️ Firewall', 'status_ufw'), Markup.button.callback('📜 SSL Manager', 'status_ssl')],
                 [Markup.button.callback('🗄️ Database', 'status_db'), Markup.button.callback('🐳 Docker', 'status_docker')],
-                [Markup.button.callback('❓ Help', 'help_msg')]
+                [Markup.button.callback('🔄 Update Apps', 'list_updates'), Markup.button.callback('❓ Help', 'help_msg')]
             ])
         }
     );
@@ -674,6 +674,99 @@ bot.command('docker_restart', (ctx) => {
     shell.exec(`docker restart ${name}`, (code) => {
         ctx.reply(code === 0 ? `✅ Container *${name}* restarted.` : `❌ Gagal restart *${name}*.`, { parse_mode: 'Markdown' });
     });
+});
+
+// --- Update Apps Manager ---
+bot.action('list_updates', (ctx) => {
+    ctx.reply('🔄 *UPDATE MANAGER*\n\nSedang mengambil daftar aplikasi dari PM2...', { parse_mode: 'Markdown' });
+
+    // Get PM2 list in JSON format to get paths
+    shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.reply('❌ Gagal mengambil data PM2.');
+
+        try {
+            const list = JSON.parse(stdout);
+            if (list.length === 0) return ctx.reply('📭 Tidak ada aplikasi aktif di PM2.');
+
+            const buttons = [];
+            list.forEach(app => {
+                // Create button for each app: Name (ID)
+                // Callback data format: update_app:<name>
+                buttons.push([Markup.button.callback(`🚀 Update ${app.name}`, `update_app:${app.name}`)]);
+            });
+            
+            // Add cancel button
+            buttons.push([Markup.button.callback('❌ Cancel', 'delete_msg')]);
+
+            ctx.reply('📦 *Pilih Aplikasi untuk Di-Update:*\n\nBot akan melakukan:\n1. `git pull` (ambil code terbaru)\n2. `pm2 restart` (restart app)', {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard(buttons)
+            });
+
+        } catch (e) {
+            console.error(e);
+            ctx.reply('❌ Error parsing data aplikasi.');
+        }
+    });
+});
+
+// Handle Update Action (Regex to capture app name)
+bot.action(/update_app:(.+)/, async (ctx) => {
+    const appName = ctx.match[1];
+    
+    // 1. Send Loading Message
+    await ctx.reply(`⏳ *Memulai Update: ${appName}*...`, { parse_mode: 'Markdown' });
+
+    // 2. Get App Path from PM2
+    shell.exec('pm2 jlist', { silent: true }, async (code, stdout, stderr) => {
+        try {
+            const list = JSON.parse(stdout);
+            const app = list.find(p => p.name === appName);
+            
+            if (!app) {
+                return ctx.reply(`❌ Aplikasi *${appName}* tidak ditemukan di PM2.`, { parse_mode: 'Markdown' });
+            }
+
+            const appPath = app.pm2_env.pm_cwd; // Working Directory
+            
+            // 3. Execute GIT PULL
+            await ctx.reply(`📂 Masuk ke folder:\n\`${appPath}\`\n⬇️ Menjalankan git pull...`, { parse_mode: 'Markdown' });
+            
+            const gitCmd = `cd "${appPath}" && git pull`;
+            shell.exec(gitCmd, { silent: true }, async (gCode, gOut, gErr) => {
+                
+                // Check Git Result
+                let gitStatus = '';
+                if (gCode !== 0) {
+                    // Git failed
+                    return ctx.reply(`❌ *Git Pull Gagal!*\n\nError:\n\`${gErr}\``, { parse_mode: 'Markdown' });
+                } else {
+                    gitStatus = gOut.trim();
+                    await ctx.reply(`✅ *Git Pull Berhasil!*\nOutput: _${gitStatus}_`, { parse_mode: 'Markdown' });
+                }
+
+                // 4. Restart PM2
+                await ctx.reply(`🔄 Restarting PM2 process: *${appName}*...`, { parse_mode: 'Markdown' });
+                
+                shell.exec(`pm2 restart ${appName}`, { silent: true }, (pCode, pOut, pErr) => {
+                    if (pCode === 0) {
+                        ctx.reply(`🎉 *UPDATE SUKSES!* ✅\n\nAplikasi *${appName}* sudah diperbarui dan direstart.`, { parse_mode: 'Markdown' });
+                    } else {
+                        ctx.reply(`⚠️ *Git berhasil, tapi PM2 Restart gagal.*\nError: ${pErr}`, { parse_mode: 'Markdown' });
+                    }
+                });
+            });
+
+        } catch (e) {
+            console.error(e);
+            ctx.reply('❌ Terjadi kesalahan sistem saat update.');
+        }
+    });
+});
+
+// Helper to delete message
+bot.action('delete_msg', (ctx) => {
+    ctx.deleteMessage();
 });
 
 bot.action('status_sys', async (ctx) => {
