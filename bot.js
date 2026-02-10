@@ -53,8 +53,10 @@ const deployWizard = new Scenes.WizardScene(
         if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan link valid.');
         const repo = ctx.message.text.trim();
         
-        // Basic validation
-        if (!repo.startsWith('http')) return ctx.reply('⚠️ Link harus dimulai dengan http/https.');
+        // Validation
+        if (!repo.startsWith('http') && !repo.startsWith('git@')) {
+            return ctx.reply('⚠️ Link tidak valid. Gunakan format HTTPS atau SSH (git@...).');
+        }
         
         ctx.wizard.state.data.repo = repo;
         
@@ -1027,7 +1029,7 @@ bot.action('status_sys', async (ctx) => {
 // --- Deployment & Management Commands ---
 
 bot.command('deploy', async (ctx) => {
-    const args = ctx.message.text.split(' ');
+    const args = ctx.message.text.split(/\s+/).filter(a => a.length > 0);
     // /deploy <name> <repo> <port>
     if (args.length !== 4) {
         return ctx.reply('⚠️ Format salah!\nGunakan: `/deploy <name> <repo_url> <port>`', { 
@@ -1037,6 +1039,12 @@ bot.command('deploy', async (ctx) => {
     }
 
     const [_, name, repo, port] = args;
+    
+    // Validation
+    if (!repo.includes('://')) {
+        return ctx.reply('❌ URL Repository tidak valid. Pastikan menggunakan format `https://...` atau `git@...`');
+    }
+
     const appPath = path.join(APPS_DIR, name);
 
     ctx.reply(`🚀 Memulai deployment untuk *${name}*...\nRepo: ${repo}\nPort: ${port}`, { parse_mode: 'Markdown' });
@@ -1051,49 +1059,44 @@ bot.command('deploy', async (ctx) => {
 
         // 2. Clone Repo
         ctx.reply('📥 Cloning repository...');
-        if (shell.exec(`git clone ${repo} ${appPath}`).code !== 0) {
-            throw new Error('Git clone failed');
+        const cloneRes = shell.exec(`git clone ${repo} ${appPath}`, { silent: true });
+        if (cloneRes.code !== 0) {
+            throw new Error(`Git clone failed: ${cloneRes.stderr}`);
         }
 
         // 3. Install Dependencies
-        ctx.reply('📦 Installing dependencies (ini mungkin memakan waktu)...');
-        // Detect package.json or requirements.txt
+        ctx.reply('📦 Installing dependencies...');
         if (fs.existsSync(path.join(appPath, 'package.json'))) {
-            if (shell.exec(`cd ${appPath} && npm install`).code !== 0) {
+            if (shell.exec(`cd ${appPath} && npm install`, { silent: true }).code !== 0) {
                 throw new Error('NPM Install failed');
             }
         } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
-             if (shell.exec(`cd ${appPath} && pip install -r requirements.txt`).code !== 0) {
+             if (shell.exec(`cd ${appPath} && pip install -r requirements.txt`, { silent: true }).code !== 0) {
                 throw new Error('Pip Install failed');
             }
         }
 
         // 4. Start with PM2
         ctx.reply('🔥 Starting process with PM2...');
-        let script = 'index.js'; // Default
+        let script = 'index.js';
         const pkgPath = path.join(appPath, 'package.json');
         
         if (fs.existsSync(pkgPath)) {
             const pkg = require(pkgPath);
             script = pkg.main || 'index.js';
             if (pkg.scripts && pkg.scripts.start) {
-                // If it's a Next.js or complex app, use npm start
                 script = 'npm -- start';
             }
         }
 
-        // PM2 Command
-        const pm2Cmd = `pm2 start ${script} --name ${name} --cwd ${appPath} --port ${port}`;
-        // Note: passing port via env usually works better: PORT=3000 pm2 start ...
-        // Let's try to set PORT env
         const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
-        
-        if (shell.exec(startCmd).code !== 0) {
-            throw new Error('PM2 Start failed');
+        const startRes = shell.exec(startCmd, { silent: true });
+        if (startRes.code !== 0) {
+            throw new Error(`PM2 Start failed: ${startRes.stderr}`);
         }
         shell.exec('pm2 save');
 
-        // 5. Setup Nginx (Reverse Proxy)
+        // 5. Setup Nginx
         ctx.reply('🌐 Configuring Nginx...');
         const nginxConfig = `
 server {
@@ -1111,13 +1114,10 @@ server {
 }
 `;
         const configPath = path.join(NGINX_AVAILABLE, name);
-        fs.writeFileSync(configPath, nginxConfig); // Might need sudo
+        fs.writeFileSync(configPath, nginxConfig);
+        shell.exec(`ln -s ${configPath} ${path.join(NGINX_ENABLED, name)}`, { silent: true });
         
-        // Enable site
-        shell.exec(`ln -s ${configPath} ${path.join(NGINX_ENABLED, name)}`);
-        
-        // Reload Nginx
-        if (shell.exec('sudo systemctl reload nginx').code !== 0) {
+        if (shell.exec('sudo systemctl reload nginx', { silent: true }).code !== 0) {
             ctx.reply('⚠️ Gagal reload Nginx. Cek config manual.');
         }
 
@@ -1128,10 +1128,10 @@ server {
 
     } catch (err) {
         console.error(err);
-        ctx.reply(`❌ Deployment Gagal:\n${err.message}`, {
+        ctx.reply(`❌ Deployment Gagal:\n\`${err.message}\``, {
+            parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
         });
-        // Cleanup if possible?
     }
 });
 
@@ -1334,13 +1334,33 @@ bot.command('logs', (ctx) => {
     });
 });
 
-// Launch Bot
-bot.launch().then(() => {
-    console.log('🤖 Bot started!');
-}).catch((err) => {
-    console.error('❌ Bot failed to start', err);
-});
+// Launch Bot with Retry Logic
+const launchBot = async (retries = 5) => {
+    for (let i = 0; i < retries; i++) {
+        try {
+            await bot.launch();
+            console.log('🤖 Bot started!');
+            return;
+        } catch (err) {
+            console.error(`❌ Bot failed to start (Attempt ${i + 1}/${retries}):`, err.message);
+            if (i === retries - 1) {
+                console.error('💀 Max retries reached. Exiting...');
+                process.exit(1);
+            }
+            // Wait 5 seconds before retrying
+            await new Promise(resolve => setTimeout(resolve, 5000));
+        }
+    }
+};
+
+launchBot();
 
 // Graceful Stop
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGINT', () => {
+    bot.stop('SIGINT');
+    process.exit(0);
+});
+process.once('SIGTERM', () => {
+    bot.stop('SIGTERM');
+    process.exit(0);
+});

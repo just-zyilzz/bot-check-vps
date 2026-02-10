@@ -3,8 +3,9 @@ module.exports = {
     name   : "vps-bot",
     script : "./bot.js",
     watch  : true,
-    ignore_watch : ["node_modules", "logs"],
+    ignore_watch : ["node_modules", "logs", ".git"],
     max_memory_restart: '500M',
+    kill_timeout: 3000,
     env: {
       NODE_ENV: "production",
     }
