@@ -228,6 +228,8 @@ const moreMenu = Markup.inlineKeyboard([
     [Markup.button.callback('📂 List Apps', 'list_apps'), Markup.button.callback('🔐 Login Monitor', 'login_monitor')],
     [Markup.button.callback('🛡️ Firewall', 'status_ufw'), Markup.button.callback('📜 SSL Manager', 'status_ssl')],
     [Markup.button.callback('🗄️ Database', 'status_db'), Markup.button.callback('🐳 Docker', 'status_docker')],
+    [Markup.button.callback('📝 PM2 Logs', 'list_pm2_logs'), Markup.button.callback('🔄 System Update', 'sys_update')],
+    [Markup.button.callback('📈 Top Processes', 'status_top'), Markup.button.callback('⚡ Server Actions', 'server_menu')],
     [Markup.button.callback('⬅️ Kembali ke Menu Utama', 'back_to_main'), Markup.button.callback('❓ Help', 'help_msg')]
 ]);
 
@@ -846,6 +848,228 @@ bot.command('docker_restart', (ctx) => {
     });
 });
 
+// --- Top Processes ---
+bot.action('status_top', async (ctx) => {
+    try {
+        await ctx.editMessageText('📈 *Mengambil Data Proses...*', { parse_mode: 'Markdown' });
+        
+        const data = await si.processes();
+        const list = data.list
+            .sort((a, b) => b.cpu - a.cpu)
+            .slice(0, 10);
+
+        let msg = `📈 *TOP 10 PROCESSES (by CPU)*\n\n`;
+        msg += `\`PID    | %CPU | %MEM | NAME\`\n`;
+        msg += `\`-------+------+------+----------------\`\n`;
+
+        list.forEach(p => {
+            const pid = p.pid.toString().padEnd(7);
+            const cpu = p.cpu.toFixed(1).padEnd(5);
+            const mem = p.mem.toFixed(1).padEnd(5);
+            const name = p.name.substring(0, 15);
+            msg += `\`${pid}| ${cpu}| ${mem}| ${name}\`\n`;
+        });
+
+        msg += `\n*Commands:* \`/kill <pid>\``;
+
+        ctx.editMessageText(msg, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🔄 Refresh', 'status_top')],
+                [Markup.button.callback('⬅️ Kembali', 'show_more_menu')]
+            ])
+        });
+
+    } catch (e) {
+        console.error(e);
+        ctx.editMessageText('❌ Gagal mengambil process list.', {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+        });
+    }
+});
+
+bot.command('kill', (ctx) => {
+    const pid = ctx.message.text.split(' ')[1];
+    if (!pid) return ctx.reply('⚠️ Gunakan format: `/kill <pid>`');
+    
+    // Safety check: prevent killing self or init
+    if (pid === '1' || pid == process.pid) return ctx.reply('⛔ Tidak bisa kill process ini.');
+
+    shell.exec(`kill -9 ${pid}`, (code, stdout, stderr) => {
+        if (code === 0) ctx.reply(`✅ Process ${pid} killed.`);
+        else ctx.reply(`❌ Gagal kill ${pid}: ${stderr}`);
+    });
+});
+
+// --- Server Actions (Reboot) ---
+bot.action('server_menu', (ctx) => {
+    ctx.editMessageText('⚡ *SERVER ACTIONS*\n\nHati-hati, aksi ini berdampak pada seluruh server.', { 
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback('🔄 Reboot Server', 'server_reboot_ask')],
+            [Markup.button.callback('⬅️ Kembali', 'show_more_menu')]
+        ])
+    });
+});
+
+bot.action('server_reboot_ask', (ctx) => {
+    ctx.editMessageText('⚠️ *KONFIRMASI REBOOT*\n\nAnda yakin ingin me-restart VPS?\nSemua aplikasi akan berhenti sementara.', { 
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback('✅ YA, REBOOT SEKARANG', 'server_reboot_do')],
+            [Markup.button.callback('❌ BATAL', 'server_menu')]
+        ])
+    });
+});
+
+bot.action('server_reboot_do', (ctx) => {
+    ctx.reply('🔄 *System Reboot Initiated...*\n\nBot akan offline beberapa saat. 👋');
+    setTimeout(() => {
+        shell.exec('sudo reboot');
+    }, 1000);
+});
+
+// --- System Update Action ---
+bot.action('sys_update', (ctx) => {
+    ctx.editMessageText('🔄 *SYSTEM UPDATE*\n\nApakah Anda yakin ingin menjalankan `apt update && apt upgrade`?\nProses ini mungkin memakan waktu beberapa menit.', { 
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Ya, Update Sekarang', 'sys_update_confirm')],
+            [Markup.button.callback('❌ Batal', 'show_more_menu')]
+        ])
+    });
+});
+
+bot.action('sys_update_confirm', (ctx) => {
+    // 1. Send initial status
+    ctx.editMessageText('⏳ *System Update Sedang Berjalan...*\n\nMohon tunggu, bot akan tetap aktif. Jangan matikan VPS.', { parse_mode: 'Markdown' });
+
+    // 2. Run update in background
+    // Using nohup or just exec (Node.js keeps running)
+    // We use "sudo apt-get update && sudo apt-get upgrade -y"
+    // Note: This requires the user running the bot to have sudo NOPASSWD access
+    
+    const cmd = 'sudo apt-get update && sudo apt-get upgrade -y';
+    
+    exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+            console.error(`Update error: ${error}`);
+            return ctx.reply(`❌ *System Update Gagal!*\n\nError:\n\`\`\`\n${stderr.substring(0, 1000)}\n\`\`\``, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+
+        // Success
+        const output = stdout.substring(stdout.length - 2000); // Last 2000 chars
+        ctx.reply(`✅ *System Update Selesai!*\n\nOutput Terakhir:\n\`\`\`\n${output}\n\`\`\``, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
+    });
+});
+
+// --- PM2 Logs Manager ---
+bot.action('list_pm2_logs', (ctx) => {
+    ctx.editMessageText('📜 *PM2 LOGS VIEWER*\n\nSedang mengambil daftar aplikasi...', { parse_mode: 'Markdown' });
+
+    shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.editMessageText('❌ Gagal mengambil data PM2.', {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
+
+        try {
+            const list = JSON.parse(stdout);
+            if (list.length === 0) return ctx.editMessageText('📭 Tidak ada aplikasi aktif di PM2.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+
+            const buttons = [];
+            list.forEach(app => {
+                buttons.push([Markup.button.callback(`📄 ${app.name}`, `view_logs:${app.name}`)]);
+            });
+            
+            buttons.push([Markup.button.callback('⬅️ Kembali', 'show_more_menu')]);
+
+            ctx.editMessageText('📜 *Pilih Aplikasi untuk Lihat Logs:*', {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard(buttons)
+            });
+
+        } catch (e) {
+            console.error(e);
+            ctx.editMessageText('❌ Error parsing data aplikasi.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+    });
+});
+
+bot.action(/view_logs:(.+)/, (ctx) => {
+    const appName = ctx.match[1];
+    const lines = 50;
+
+    ctx.editMessageText(`⏳ Mengambil logs untuk *${appName}*...`, { parse_mode: 'Markdown' });
+
+    shell.exec('pm2 jlist', { silent: true }, (c, out, err) => {
+        try {
+            const list = JSON.parse(out);
+            const app = list.find(p => p.name === appName);
+            
+            if (!app) {
+                return ctx.editMessageText(`❌ App *${appName}* tidak ditemukan.`, {
+                    parse_mode: 'Markdown',
+                    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'list_pm2_logs')]])
+                });
+            }
+            
+            const logFile = app.pm2_env.pm_out_log_path;
+            const errFile = app.pm2_env.pm_err_log_path; // We could also offer error logs
+            
+            // Read last N lines
+            if (!fs.existsSync(logFile)) {
+                 return ctx.editMessageText(`❌ Log file tidak ditemukan:\n\`${logFile}\``, {
+                    parse_mode: 'Markdown',
+                    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'list_pm2_logs')]])
+                });
+            }
+
+            const logs = shell.tail({'-n': lines}, logFile);
+            
+            const header = `📜 *Logs: ${appName}* (Last ${lines} lines)\nPath: \`${logFile}\`\n\n`;
+            const footer = '\n\n_Note: Gunakan /logs <name> <lines> untuk custom lines_';
+
+            if ((header + logs + footer).length > 4000) {
+                // Truncate
+                const maxLen = 4000 - header.length - footer.length - 20;
+                const truncatedLogs = logs.substring(logs.length - maxLen);
+                
+                ctx.editMessageText(header + '```\n... ' + truncatedLogs + '\n```' + footer, { 
+                   parse_mode: 'Markdown',
+                   ...Markup.inlineKeyboard([
+                       [Markup.button.callback('🔄 Refresh', `view_logs:${appName}`)],
+                       [Markup.button.callback('⬅️ Kembali ke List', 'list_pm2_logs')]
+                   ])
+                });
+            } else {
+                ctx.editMessageText(header + '```\n' + logs + '\n```' + footer, { 
+                   parse_mode: 'Markdown',
+                   ...Markup.inlineKeyboard([
+                       [Markup.button.callback('🔄 Refresh', `view_logs:${appName}`)],
+                       [Markup.button.callback('⬅️ Kembali ke List', 'list_pm2_logs')]
+                   ])
+                });
+            }
+            
+        } catch (e) {
+            console.error(e);
+            ctx.editMessageText('❌ Gagal mengambil logs.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'list_pm2_logs')]])
+            });
+        }
+    });
+});
+
 // --- Update Apps Manager ---
 bot.action('list_updates', (ctx) => {
     ctx.editMessageText('🔄 *UPDATE MANAGER*\n\nSedang mengambil daftar aplikasi dari PM2...', { parse_mode: 'Markdown' });
@@ -872,7 +1096,7 @@ bot.action('list_updates', (ctx) => {
             // Add cancel button
             buttons.push([Markup.button.callback('❌ Cancel', 'delete_msg'), Markup.button.callback('⬅️ Kembali', 'back_to_main')]);
 
-            ctx.editMessageText('📦 *Pilih Aplikasi untuk Di-Update:*\n\nBot akan melakukan:\n1. `git pull` (ambil code terbaru)\n2. `pm2 restart` (restart app)', {
+            ctx.editMessageText('📦 *Pilih Aplikasi untuk Di-Update:*\n\nBot akan melakukan:\n1. `git pull`\n2. `npm install / pip install` (jika ada)\n3. `pm2 restart`', {
                 parse_mode: 'Markdown',
                 ...Markup.inlineKeyboard(buttons)
             });
@@ -963,10 +1187,53 @@ bot.action(/update_app:(.+)/, async (ctx) => {
             });
         }
 
-        // 3. Success Update -> Restart PM2
+        // 3. Install Dependencies (New Feature)
+        await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n📦 Checking dependencies...`, { parse_mode: 'Markdown' });
+        let installLog = '';
+
+        if (fs.existsSync(path.join(appPath, 'package.json'))) {
+             // NPM Install
+             const npmRes = await execPromise('npm install', appPath);
+             if (npmRes.code === 0) {
+                 installLog = '✅ NPM Install Success';
+             } else {
+                 installLog = '⚠️ NPM Install Failed (Continuing...)';
+                 console.error(npmRes.stderr);
+             }
+        } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
+             // Pip Install
+             const pipRes = await execPromise('pip install -r requirements.txt', appPath);
+             if (pipRes.code === 0) {
+                 installLog = '✅ Pip Install Success';
+             } else {
+                 installLog = '⚠️ Pip Install Failed (Continuing...)';
+                 console.error(pipRes.stderr);
+             }
+        } else {
+            installLog = 'ℹ️ No dependencies found';
+        }
+
+        // 4. Success Update -> Restart PM2
         const gitStatus = gitRes.stdout.trim().substring(0, 200);
-        await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n✅ Git Pull Berhasil!\n🔄 Restarting PM2 process...`, { parse_mode: 'Markdown' });
+        await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n✅ Git Pull Berhasil!\n${installLog}\n🔄 Restarting PM2 process...`, { parse_mode: 'Markdown' });
         
+        // Check if we are updating ourselves
+        const isSelfUpdate = path.resolve(appPath) === path.resolve(process.cwd());
+
+        if (isSelfUpdate) {
+            // Send success message FIRST because we will die soon
+            await ctx.editMessageText(`🎉 *UPDATE SUKSES!* ✅\n\n📦 App: *${appName}* (Self-Update)\n📝 Git: _${gitStatus}_\n🔄 PM2: Restarting in 3s...`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+            
+            // Trigger restart with delay to ensure message is sent
+            setTimeout(() => {
+                shell.exec(`pm2 restart ${appName}`);
+            }, 1000);
+            return;
+        }
+
         const pm2Restart = await execPromise(`pm2 restart ${appName}`, appPath);
         
         if (pm2Restart.code === 0) {
