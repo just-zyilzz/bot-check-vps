@@ -224,6 +224,7 @@ Silakan pilih menu di bawah ini:`,
                 [Markup.button.callback('🌐 Network', 'status_net'), Markup.button.callback('ℹ️ System Info', 'status_sys')],
                 [Markup.button.callback('📂 List Apps', 'list_apps'), Markup.button.callback('🔐 Login Monitor', 'login_monitor')],
                 [Markup.button.callback('🛡️ Firewall', 'status_ufw'), Markup.button.callback('📜 SSL Manager', 'status_ssl')],
+                [Markup.button.callback('🗄️ Database', 'status_db'), Markup.button.callback('🐳 Docker', 'status_docker')],
                 [Markup.button.callback('❓ Help', 'help_msg')]
             ])
         }
@@ -548,6 +549,130 @@ bot.command('ssl_renew', (ctx) => {
         } else {
             ctx.reply(`❌ Gagal memperbarui SSL:\n${stderr}`, { parse_mode: 'Markdown' });
         }
+    });
+});
+
+// --- Database Health Check Action ---
+bot.action('status_db', async (ctx) => {
+    await ctx.reply('🗄️ *DATABASE HEALTH CHECK*\n\nMengecek status database...', { parse_mode: 'Markdown' });
+    
+    // List of common databases to check
+    const dbs = ['mysql', 'mariadb', 'postgresql', 'mongod', 'redis-server'];
+    let msg = '🗄️ *DATABASE STATUS*\n\n';
+    let found = false;
+
+    for (const db of dbs) {
+        // Check if service exists first
+        const checkService = shell.exec(`systemctl list-unit-files ${db}.service`, { silent: true });
+        
+        if (checkService.stdout.includes(db)) {
+            found = true;
+            const status = shell.exec(`systemctl is-active ${db}`, { silent: true }).stdout.trim();
+            const icon = status === 'active' ? '🟢' : '🔴';
+            
+            // Get memory usage if active
+            let mem = '';
+            if (status === 'active') {
+                // Try to get RAM usage via ps
+                // Warning: This is a rough estimate based on process name
+                const memCmd = `ps -C ${db.replace('.service','')} -o %mem,rss --no-headers | awk '{sum+=$2} END {print sum/1024 " MB"}'`;
+                const memUsage = shell.exec(memCmd, { silent: true }).stdout.trim();
+                if (memUsage) mem = `(RAM: ${memUsage})`;
+            }
+
+            msg += `${icon} *${db}*: ${status.toUpperCase()} ${mem}\n`;
+        }
+    }
+
+    if (!found) {
+        msg += '⚠️ Tidak ada database umum (MySQL, Mongo, Postgres, Redis) yang terdeteksi via systemd.\n';
+    }
+
+    msg += `\n*Commands:*
+- \`/db_restart <name>\` - Restart database
+(Contoh: \`/db_restart mysql\`)`;
+
+    ctx.reply(msg, { parse_mode: 'Markdown' });
+});
+
+bot.command('db_restart', (ctx) => {
+    const db = ctx.message.text.split(' ')[1];
+    if (!db) return ctx.reply('⚠️ Masukkan nama service. Contoh: `/db_restart mysql`');
+    
+    ctx.reply(`🔄 Merestart database *${db}*...`, { parse_mode: 'Markdown' });
+    if (shell.exec(`sudo systemctl restart ${db}`).code === 0) {
+        ctx.reply(`✅ Database *${db}* berhasil direstart!`, { parse_mode: 'Markdown' });
+    } else {
+        ctx.reply(`❌ Gagal restart *${db}*. Cek nama service atau logs.`, { parse_mode: 'Markdown' });
+    }
+});
+
+// --- Docker Monitor Action ---
+bot.action('status_docker', async (ctx) => {
+    // Check if docker is installed
+    if (!shell.which('docker')) {
+        return ctx.reply('❌ Docker tidak terinstall di VPS ini.');
+    }
+
+    await ctx.reply('🐳 *DOCKER MONITOR*\n\nMengambil data container...', { parse_mode: 'Markdown' });
+
+    // Get Containers
+    shell.exec('docker ps -a --format "table {{.Names}}\\t{{.Status}}\\t{{.ID}}"', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.reply(`❌ Error Docker:\n${stderr}`);
+
+        const containers = stdout.trim();
+        
+        // Get Stats (CPU/RAM) - non streaming
+        shell.exec('docker stats --no-stream --format "table {{.Name}}\\t{{.CPUPerc}}\\t{{.MemUsage}}"', { silent: true }, (c, out, err) => {
+            
+            let statsMsg = '';
+            if (c === 0) {
+                statsMsg = `\n*Resource Usage:*\n\`\`\`\n${out.trim()}\n\`\`\``;
+            }
+
+            const msg = `🐳 *CONTAINER LIST*
+
+\`\`\`
+${containers}
+\`\`\`
+${statsMsg}
+
+*Commands:*
+- \`/docker_start <name>\`
+- \`/docker_stop <name>\`
+- \`/docker_restart <name>\``;
+
+            // Handle long messages
+            if (msg.length > 4000) {
+                ctx.reply(msg.substring(0, 4000) + '\n...', { parse_mode: 'Markdown' });
+            } else {
+                ctx.reply(msg, { parse_mode: 'Markdown' });
+            }
+        });
+    });
+});
+
+bot.command('docker_start', (ctx) => {
+    const name = ctx.message.text.split(' ')[1];
+    if (!name) return ctx.reply('⚠️ Masukkan nama container.');
+    shell.exec(`docker start ${name}`, (code) => {
+        ctx.reply(code === 0 ? `✅ Container *${name}* started.` : `❌ Gagal start *${name}*.`, { parse_mode: 'Markdown' });
+    });
+});
+
+bot.command('docker_stop', (ctx) => {
+    const name = ctx.message.text.split(' ')[1];
+    if (!name) return ctx.reply('⚠️ Masukkan nama container.');
+    shell.exec(`docker stop ${name}`, (code) => {
+        ctx.reply(code === 0 ? `✅ Container *${name}* stopped.` : `❌ Gagal stop *${name}*.`, { parse_mode: 'Markdown' });
+    });
+});
+
+bot.command('docker_restart', (ctx) => {
+    const name = ctx.message.text.split(' ')[1];
+    if (!name) return ctx.reply('⚠️ Masukkan nama container.');
+    shell.exec(`docker restart ${name}`, (code) => {
+        ctx.reply(code === 0 ? `✅ Container *${name}* restarted.` : `❌ Gagal restart *${name}*.`, { parse_mode: 'Markdown' });
     });
 });
 
