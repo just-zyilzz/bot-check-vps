@@ -424,48 +424,48 @@ bot.action('speedtest_run', async (ctx) => {
     });
 });
 
-bot.action('login_monitor', (ctx) => {
-    ctx.reply('🔐 *LOGIN MONITOR*\n\nSedang menganalisa login di VPS...', { parse_mode: 'Markdown' });
+bot.action('login_monitor', async (ctx) => {
+    try {
+        await ctx.reply('🔐 *LOGIN MONITOR*\n\nSedang menganalisa login di VPS...', { parse_mode: 'Markdown' });
 
-    // Get active users
-    const activeUsers = shell.exec('who', { silent: true }).stdout.trim() || 'Tidak ada user aktif';
-    
-    // Get last logins
-    const lastLogins = shell.exec('last -n 10', { silent: true }).stdout.trim() || 'Tidak ada history';
-    
-    // Get failed logins (last 24 hours)
-    const failedLogins = shell.exec("grep 'Failed password' /var/log/auth.log | tail -20", { silent: true }).stdout.trim() || 'Tidak ada failed login';
-    
-    // Get successful logins (last 24 hours)
-    const successLogins = shell.exec("grep 'Accepted password' /var/log/auth.log | tail -10", { silent: true }).stdout.trim() || 'Tidak ada login sukses';
+        // Get active users
+        const activeUsers = shell.exec('who', { silent: true }).stdout.trim() || 'Tidak ada user aktif';
+        
+        // Get last logins
+        const lastLogins = shell.exec('last -n 5', { silent: true }).stdout.trim() || 'Tidak ada history';
+        
+        // Get failed logins (last 24 hours)
+        const failedLogins = shell.exec("grep 'Failed password' /var/log/auth.log | tail -10", { silent: true }).stdout.trim() || 'Tidak ada failed login';
+        
+        // Get successful logins (last 24 hours)
+        const successLogins = shell.exec("grep 'Accepted password' /var/log/auth.log | tail -5", { silent: true }).stdout.trim() || 'Tidak ada login sukses';
 
-    const message = `🔐 *LOGIN MONITOR REPORT*
+        const sections = [
+            { title: '👥 Active Users', content: activeUsers },
+            { title: '📜 Last 5 Logins', content: lastLogins },
+            { title: '❌ Failed Logins (Last 10)', content: failedLogins },
+            { title: '✅ Successful Logins (Last 5)', content: successLogins }
+        ];
 
-*👥 Active Users:*
-\`\`\`
-${activeUsers}
-\`\`\`
+        let fullMessage = `🔐 *LOGIN MONITOR REPORT*\n\n`;
+        
+        for (const section of sections) {
+            const sectionText = `*${section.title}:*\n\`\`\`\n${section.content}\n\`\`\`\n\n`;
+            if ((fullMessage + sectionText).length > 4000) {
+                // Send current buffer and start new one
+                await ctx.reply(fullMessage, { parse_mode: 'Markdown' });
+                fullMessage = `*${section.title} (cont):*\n\`\`\`\n${section.content}\n\`\`\`\n\n`;
+            } else {
+                fullMessage += sectionText;
+            }
+        }
 
-*📜 Last 10 Logins:*
-\`\`\`
-${lastLogins}
-\`\`\`
-
-*❌ Failed Logins (Last 20):*
-\`\`\`
-${failedLogins}
-\`\`\`
-
-*✅ Successful Logins (Last 10):*
-\`\`\`
-${successLogins}
-\`\`\``;
-
-    // Split message if too long
-    if (message.length > 4000) {
-        ctx.reply(message.substring(0, 4000) + '\n... (pesan terpotong)', { parse_mode: 'Markdown' });
-    } else {
-        ctx.reply(message, { parse_mode: 'Markdown' });
+        if (fullMessage) {
+            await ctx.reply(fullMessage, { parse_mode: 'Markdown' });
+        }
+    } catch (err) {
+        console.error(err);
+        ctx.reply('❌ Gagal mengambil data login monitor.');
     }
 });
 
