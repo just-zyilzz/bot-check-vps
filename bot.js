@@ -4,7 +4,7 @@ const si = require('systeminformation');
 const shell = require('shelljs');
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 
 // Configuration
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -888,11 +888,16 @@ bot.action('list_updates', (ctx) => {
 bot.action(/update_app:(.+)/, async (ctx) => {
     const appName = ctx.match[1];
     
-    // Helper for async shell exec
-    const execPromise = (cmd) => {
+    // Helper for async shell exec with CWD support
+    const execPromise = (cmd, cwd) => {
         return new Promise((resolve) => {
-            shell.exec(cmd, { silent: true }, (code, stdout, stderr) => {
-                resolve({ code, stdout, stderr });
+            // Use native child_process exec for better CWD handling on Windows
+            exec(cmd, { cwd: cwd }, (error, stdout, stderr) => {
+                resolve({ 
+                    code: error ? error.code || 1 : 0, 
+                    stdout: stdout || '', 
+                    stderr: stderr || '' 
+                });
             });
         });
     };
@@ -900,8 +905,10 @@ bot.action(/update_app:(.+)/, async (ctx) => {
     try {
         await ctx.editMessageText(`⏳ *Memulai Update: ${appName}*...`, { parse_mode: 'Markdown' });
 
-        // 1. Get App Path from PM2
-        const pm2Res = await execPromise('pm2 jlist');
+        // 1. Get App Path from PM2 (Use shell.exec for simple commands)
+        // pm2 jlist is global, so no cwd needed
+        const pm2Res = await new Promise(r => shell.exec('pm2 jlist', { silent: true }, (c, o, e) => r({code:c, stdout:o, stderr:e})));
+        
         if (pm2Res.code !== 0) throw new Error('Gagal mengambil data PM2');
 
         const list = JSON.parse(pm2Res.stdout);
@@ -919,8 +926,16 @@ bot.action(/update_app:(.+)/, async (ctx) => {
         // 2. Execute GIT PULL
         await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n📂 Folder: \`${appPath}\`\n⬇️ Menjalankan git pull...`, { parse_mode: 'Markdown' });
         
-        const gitCmd = `cd "${appPath}" && git pull`;
-        const gitRes = await execPromise(gitCmd);
+        // Check if git exists in the folder
+        if (!fs.existsSync(path.join(appPath, '.git'))) {
+             return ctx.editMessageText(`❌ Folder \`${appPath}\` bukan git repository!`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+
+        // Run git pull with specific CWD
+        const gitRes = await execPromise('git pull', appPath);
         const output = (gitRes.stdout + '\n' + gitRes.stderr).trim();
 
         // Check result
@@ -936,8 +951,9 @@ bot.action(/update_app:(.+)/, async (ctx) => {
             if (output.includes('Conflict')) reason = '⚠️ Merge Conflict (Harus fix manual)';
             else if (output.includes('Permission denied')) reason = '🚫 Permission Denied (Cek SSH Key)';
             else if (output.includes('Could not resolve host')) reason = '🌐 Network Error / Timeout';
-            else if (output.includes('Please commit your changes')) reason = '⚠️ Ada perubahan lokal yang belum di-commit';
+            else if (output.includes('Please commit your changes')) reason = '⚠️ Ada perubahan lokal yang belum di-commit. (Coba stash atau commit dulu)';
             else if (output.includes('not a git repository')) reason = '⚠️ Folder bukan git repository';
+            else if (output.includes('dubious ownership')) reason = '⚠️ Owner folder berbeda (Git security)';
             
             return ctx.editMessageText(`❌ *Git Pull Gagal!*\n\n*Alasan:* ${reason}\n\n*Log Detail:*\n\`\`\`\n${output.substring(0, 1000)}\n\`\`\``, { 
                 parse_mode: 'Markdown',
@@ -949,7 +965,7 @@ bot.action(/update_app:(.+)/, async (ctx) => {
         const gitStatus = gitRes.stdout.trim().substring(0, 200);
         await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n✅ Git Pull Berhasil!\n🔄 Restarting PM2 process...`, { parse_mode: 'Markdown' });
         
-        const pm2Restart = await execPromise(`pm2 restart ${appName}`);
+        const pm2Restart = await execPromise(`pm2 restart ${appName}`, appPath);
         
         if (pm2Restart.code === 0) {
             ctx.editMessageText(`🎉 *UPDATE SUKSES!* ✅\n\n📦 App: *${appName}*\n📝 Git: _${gitStatus}_\n🔄 PM2: Restarted`, { 
