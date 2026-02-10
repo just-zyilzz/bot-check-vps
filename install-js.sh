@@ -22,10 +22,11 @@ echo -e "${GREEN}📦 Installing Node.js 18.x...${NC}"
 curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
 apt install -y nodejs build-essential
 
-# 3. Install PM2 & Git & Nginx
-echo -e "${GREEN}📦 Installing PM2, Git, Nginx...${NC}"
+# 3. Install PM2 & Git & Nginx & Speedtest
+echo -e "${GREEN}📦 Installing PM2, Git, Nginx, Speedtest...${NC}"
 npm install -g pm2
-apt install -y git nginx
+apt install -y git nginx python3-pip
+pip3 install speedtest-cli
 
 # 4. Setup Directories
 echo -e "${GREEN}📂 Setting up directories...${NC}"

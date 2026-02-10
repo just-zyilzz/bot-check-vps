@@ -16,6 +16,29 @@ const APPS_DIR = '/var/www';
 const NGINX_AVAILABLE = '/etc/nginx/sites-available';
 const NGINX_ENABLED = '/etc/nginx/sites-enabled';
 
+// Helper to find available port
+const getAvailablePort = async (startPort = 3000) => {
+    let port = startPort;
+    while (true) {
+        try {
+            // Check if port is in use using 'lsof' or 'netstat' logic via shell
+            // Simple check: try to listen or check netstats. 
+            // Using systeminformation for cleaner approach
+            const connections = await si.networkConnections();
+            const usedPorts = connections.map(c => c.localPort);
+            
+            if (!usedPorts.includes(port)) {
+                return port;
+            }
+            port++;
+        } catch (e) {
+            console.error('Error checking ports:', e);
+            // Fallback simple increment if check fails
+            return port + Math.floor(Math.random() * 100); 
+        }
+    }
+};
+
 // --- WIZARD SCENE FOR DEPLOYMENT ---
 const deployWizard = new Scenes.WizardScene(
     'deploy_wizard',
@@ -28,13 +51,18 @@ const deployWizard = new Scenes.WizardScene(
     // Step 2: Ask for App Name
     (ctx) => {
         if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan link valid.');
-        ctx.wizard.state.data.repo = ctx.message.text.trim();
+        const repo = ctx.message.text.trim();
+        
+        // Basic validation
+        if (!repo.startsWith('http')) return ctx.reply('⚠️ Link harus dimulai dengan http/https.');
+        
+        ctx.wizard.state.data.repo = repo;
         
         ctx.reply('📝 *Nama Aplikasi*\n\nBerikan nama untuk aplikasi ini (tanpa spasi).\n(Contoh: my-api)', { parse_mode: 'Markdown' });
         return ctx.wizard.next();
     },
-    // Step 3: Ask for Port
-    (ctx) => {
+    // Step 3: Auto Port & Execute
+    async (ctx) => {
         if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan nama valid.');
         const name = ctx.message.text.trim().replace(/\s+/g, '-').toLowerCase();
         
@@ -46,34 +74,42 @@ const deployWizard = new Scenes.WizardScene(
         
         ctx.wizard.state.data.name = name;
         
-        ctx.reply('🔌 *Port Aplikasi*\n\nDi port berapa aplikasi ini akan berjalan?\n(Contoh: 3000)', { parse_mode: 'Markdown' });
-        return ctx.wizard.next();
-    },
-    // Step 4: Execute Deployment
-    async (ctx) => {
-        if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan port valid.');
-        const port = parseInt(ctx.message.text.trim());
-        if (isNaN(port)) return ctx.reply('⚠️ Port harus berupa angka.');
-        
+        // AUTO PORT DETECTION
+        await ctx.reply('🔍 Mencari port yang tersedia...');
+        const port = await getAvailablePort(3000);
         ctx.wizard.state.data.port = port;
-        const { repo, name } = ctx.wizard.state.data;
+        
+        const { repo } = ctx.wizard.state.data;
         
         // Start Deployment Process
-        await ctx.reply(`⚙️ *Memulai Deployment...*\n\n📦 App: ${name}\n🔗 Repo: ${repo}\n🔌 Port: ${port}`, { parse_mode: 'Markdown' });
+        await ctx.reply(`⚙️ *Memulai Deployment...*\n\n📦 App: ${name}\n🔗 Repo: ${repo}\n🔌 Port: ${port} (Auto)`, { parse_mode: 'Markdown' });
         
         const appPath = path.join(APPS_DIR, name);
         
         try {
             // 1. Clone
             await ctx.reply('📥 Cloning repository...');
-            if (shell.exec(`git clone ${repo} ${appPath}`).code !== 0) throw new Error('Git clone failed');
+            const cloneRes = shell.exec(`git clone ${repo} ${appPath}`, { silent: true });
+            if (cloneRes.code !== 0) {
+                throw new Error(`Git Clone Failed:\n${cloneRes.stderr}`);
+            }
 
             // 2. Install Dependencies
             await ctx.reply('📦 Installing dependencies...');
+            let installCmd = '';
+            
             if (fs.existsSync(path.join(appPath, 'package.json'))) {
-                if (shell.exec(`cd ${appPath} && npm install`).code !== 0) throw new Error('NPM Install failed');
+                installCmd = `cd ${appPath} && npm install`;
             } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
-                if (shell.exec(`cd ${appPath} && pip install -r requirements.txt`).code !== 0) throw new Error('Pip Install failed');
+                installCmd = `cd ${appPath} && pip install -r requirements.txt`;
+            }
+            
+            if (installCmd) {
+                const installRes = shell.exec(installCmd, { silent: true });
+                if (installRes.code !== 0) {
+                     // Check for specific timeout or network errors in stdout/stderr if needed
+                    throw new Error(`Install Failed:\n${installRes.stderr.substring(0, 500)}...`); // Truncate long logs
+                }
             }
 
             // 3. Start PM2
@@ -87,7 +123,10 @@ const deployWizard = new Scenes.WizardScene(
             }
             
             const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
-            if (shell.exec(startCmd).code !== 0) throw new Error('PM2 Start failed');
+            const startRes = shell.exec(startCmd, { silent: true });
+            if (startRes.code !== 0) {
+                throw new Error(`PM2 Start Failed:\n${startRes.stderr}`);
+            }
             shell.exec('pm2 save');
 
             // 4. Setup Nginx
@@ -110,15 +149,20 @@ server {
             const configPath = path.join(NGINX_AVAILABLE, name);
             fs.writeFileSync(configPath, nginxConfig);
             shell.exec(`ln -s ${configPath} ${path.join(NGINX_ENABLED, name)}`);
-            shell.exec('sudo systemctl reload nginx');
+            
+            const nginxReload = shell.exec('sudo systemctl reload nginx');
+            if (nginxReload.code !== 0) {
+                 await ctx.reply('⚠️ Nginx reload failed. Cek config manual.');
+            }
 
-            await ctx.reply(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: http://${name}.${VPS_IP}.nip.io`, { parse_mode: 'Markdown' });
+            await ctx.reply(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: http://${name}.${VPS_IP}.nip.io\n🔌 Port: ${port}`, { parse_mode: 'Markdown' });
             
         } catch (err) {
             console.error(err);
-            await ctx.reply(`❌ Deployment Failed:\n${err.message}`);
-            // Cleanup attempt
-            // shell.rm('-rf', appPath); 
+            // Cleanup: remove folder if failed
+            if (fs.existsSync(appPath)) shell.rm('-rf', appPath);
+            
+            await ctx.reply(`❌ *DEPLOYMENT GAGAL!* 😭\n\nError Detail:\n\`${err.message}\`\n\nFolder aplikasi telah dibersihkan. Silakan coba lagi.`, { parse_mode: 'Markdown' });
         }
 
         return ctx.scene.leave();
@@ -176,9 +220,9 @@ Silakan pilih menu di bawah ini:`,
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([
                 [Markup.button.callback('📊 Status VPS', 'status_vps'), Markup.button.callback('🚀 Deploy App', 'start_deploy')],
-                [Markup.button.callback('💾 Disk Space', 'status_disk'), Markup.button.callback('🌐 Network', 'status_net')],
-                [Markup.button.callback('ℹ️ System Info', 'status_sys'), Markup.button.callback('📂 List Apps', 'list_apps')],
-                [Markup.button.callback('💻 CPU Details', 'status_resources'), Markup.button.callback('❓ Help', 'help_msg')]
+                [Markup.button.callback('� Speedtest', 'speedtest_run'), Markup.button.callback('💾 Disk Space', 'status_disk')],
+                [Markup.button.callback('🌐 Network', 'status_net'), Markup.button.callback('ℹ️ System Info', 'status_sys')],
+                [Markup.button.callback('� List Apps', 'list_apps'), Markup.button.callback('❓ Help', 'help_msg')]
             ])
         }
     );
@@ -332,6 +376,51 @@ bot.action('status_net', async (ctx) => {
     } catch (e) {
         ctx.reply('❌ Gagal mengambil data network.');
     }
+});
+
+// --- Speedtest Action ---
+bot.action('speedtest_run', async (ctx) => {
+    await ctx.reply('⏳ *Running Speedtest...*\n\nMohon tunggu sekitar 30 detik. Bot sedang mengukur kecepatan jaringan VPS Anda...', { parse_mode: 'Markdown' });
+    
+    // Execute speedtest-cli --json
+    shell.exec('speedtest-cli --json', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) {
+            // Fallback if not found
+            if (stderr.includes('not found')) {
+                return ctx.reply('❌ `speedtest-cli` belum terinstall.\nRun: `apt install speedtest-cli` atau `pip install speedtest-cli` di VPS.', { parse_mode: 'Markdown' });
+            }
+            return ctx.reply(`❌ Speedtest gagal:\n${stderr}`);
+        }
+
+        try {
+            const result = JSON.parse(stdout);
+            
+            // Convert bits to Mbps
+            const dl = (result.download / 1000000).toFixed(2);
+            const ul = (result.upload / 1000000).toFixed(2);
+            const ping = result.ping.toFixed(1);
+            const isp = result.client.isp;
+            const country = result.client.country;
+            const server = result.server.sponsor;
+            const serverLoc = result.server.name;
+            
+            const msg = `🚀 *SPEEDTEST RESULT*
+
+*Download:* ${dl} Mbps
+*Upload:* ${ul} Mbps
+*Ping:* ${ping} ms
+
+*ISP:* ${isp} (${country})
+*Server:* ${server} - ${serverLoc}
+*IP:* ${result.client.ip}`;
+
+            ctx.reply(msg, { parse_mode: 'Markdown' });
+            
+        } catch (e) {
+            console.error(e);
+            ctx.reply('❌ Gagal memproses hasil speedtest.');
+        }
+    });
 });
 
 bot.action('status_sys', async (ctx) => {
