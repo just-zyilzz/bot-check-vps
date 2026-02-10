@@ -296,7 +296,10 @@ Contoh:
 
 *Monitoring:*
 Gunakan menu visual dengan /start`,
-        { parse_mode: 'Markdown' }
+        { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        }
     );
 });
 
@@ -594,25 +597,41 @@ ${stdout.trim() || 'UFW is inactive'}
 
 bot.command('allow', (ctx) => {
     const port = ctx.message.text.split(' ')[1];
-    if (!port) return ctx.reply('⚠️ Masukkan port. Contoh: `/allow 8080`');
+    if (!port) return ctx.reply('⚠️ Masukkan port. Contoh: `/allow 8080`', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     
     ctx.reply(`🛡️ Mencoba membuka port *${port}*...`, { parse_mode: 'Markdown' });
     if (shell.exec(`sudo ufw allow ${port}`).code === 0) {
-        ctx.reply(`✅ Port *${port}* berhasil dibuka!`, { parse_mode: 'Markdown' });
+        ctx.reply(`✅ Port *${port}* berhasil dibuka!`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     } else {
-        ctx.reply(`❌ Gagal membuka port *${port}*.`, { parse_mode: 'Markdown' });
+        ctx.reply(`❌ Gagal membuka port *${port}*.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     }
 });
 
 bot.command('deny', (ctx) => {
     const port = ctx.message.text.split(' ')[1];
-    if (!port) return ctx.reply('⚠️ Masukkan port. Contoh: `/deny 8080`');
+    if (!port) return ctx.reply('⚠️ Masukkan port. Contoh: `/deny 8080`', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     
     ctx.reply(`🛡️ Mencoba menutup port *${port}*...`, { parse_mode: 'Markdown' });
     if (shell.exec(`sudo ufw deny ${port}`).code === 0) {
-        ctx.reply(`✅ Port *${port}* berhasil ditutup!`, { parse_mode: 'Markdown' });
+        ctx.reply(`✅ Port *${port}* berhasil ditutup!`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     } else {
-        ctx.reply(`❌ Gagal menutup port *${port}*.`, { parse_mode: 'Markdown' });
+        ctx.reply(`❌ Gagal menutup port *${port}*.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     }
 });
 
@@ -652,9 +671,15 @@ bot.command('ssl_renew', (ctx) => {
     ctx.reply('⏳ Memulai proses pembaruan SSL...', { parse_mode: 'Markdown' });
     shell.exec('sudo certbot renew', { silent: true }, (code, stdout, stderr) => {
         if (code === 0) {
-            ctx.reply(`✅ *SSL Renewed!*\n\n\`\`\`\n${stdout}\n\`\`\``, { parse_mode: 'Markdown' });
+            ctx.reply(`✅ *SSL Renewed!*\n\n\`\`\`\n${stdout}\n\`\`\``, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
         } else {
-            ctx.reply(`❌ Gagal memperbarui SSL:\n${stderr}`, { parse_mode: 'Markdown' });
+            ctx.reply(`❌ Gagal memperbarui SSL:\n${stderr}`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
         }
     });
 });
@@ -707,13 +732,21 @@ bot.action('status_db', async (ctx) => {
 
 bot.command('db_restart', (ctx) => {
     const db = ctx.message.text.split(' ')[1];
-    if (!db) return ctx.reply('⚠️ Masukkan nama service. Contoh: `/db_restart mysql`');
+    if (!db) return ctx.reply('⚠️ Masukkan nama service. Contoh: `/db_restart mysql`', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     
     ctx.reply(`🔄 Merestart database *${db}*...`, { parse_mode: 'Markdown' });
     if (shell.exec(`sudo systemctl restart ${db}`).code === 0) {
-        ctx.reply(`✅ Database *${db}* berhasil direstart!`, { parse_mode: 'Markdown' });
+        ctx.reply(`✅ Database *${db}* berhasil direstart!`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     } else {
-        ctx.reply(`❌ Gagal restart *${db}*. Cek nama service atau logs.`, { parse_mode: 'Markdown' });
+        ctx.reply(`❌ Gagal restart *${db}*. Cek nama service atau logs.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     }
 });
 
@@ -774,25 +807,40 @@ ${statsMsg}
 
 bot.command('docker_start', (ctx) => {
     const name = ctx.message.text.split(' ')[1];
-    if (!name) return ctx.reply('⚠️ Masukkan nama container.');
+    if (!name) return ctx.reply('⚠️ Masukkan nama container.', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     shell.exec(`docker start ${name}`, (code) => {
-        ctx.reply(code === 0 ? `✅ Container *${name}* started.` : `❌ Gagal start *${name}*.`, { parse_mode: 'Markdown' });
+        ctx.reply(code === 0 ? `✅ Container *${name}* started.` : `❌ Gagal start *${name}*.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     });
 });
 
 bot.command('docker_stop', (ctx) => {
     const name = ctx.message.text.split(' ')[1];
-    if (!name) return ctx.reply('⚠️ Masukkan nama container.');
+    if (!name) return ctx.reply('⚠️ Masukkan nama container.', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     shell.exec(`docker stop ${name}`, (code) => {
-        ctx.reply(code === 0 ? `✅ Container *${name}* stopped.` : `❌ Gagal stop *${name}*.`, { parse_mode: 'Markdown' });
+        ctx.reply(code === 0 ? `✅ Container *${name}* stopped.` : `❌ Gagal stop *${name}*.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     });
 });
 
 bot.command('docker_restart', (ctx) => {
     const name = ctx.message.text.split(' ')[1];
-    if (!name) return ctx.reply('⚠️ Masukkan nama container.');
+    if (!name) return ctx.reply('⚠️ Masukkan nama container.', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     shell.exec(`docker restart ${name}`, (code) => {
-        ctx.reply(code === 0 ? `✅ Container *${name}* restarted.` : `❌ Gagal restart *${name}*.`, { parse_mode: 'Markdown' });
+        ctx.reply(code === 0 ? `✅ Container *${name}* restarted.` : `❌ Gagal restart *${name}*.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     });
 });
 
@@ -840,69 +888,88 @@ bot.action('list_updates', (ctx) => {
 bot.action(/update_app:(.+)/, async (ctx) => {
     const appName = ctx.match[1];
     
-    // 1. Send Loading Message (Keep reference to edit later)
-    // We use editMessageText because this is triggered by a button click
-    await ctx.editMessageText(`⏳ *Memulai Update: ${appName}*...`, { parse_mode: 'Markdown' });
-
-    // 2. Get App Path from PM2
-    shell.exec('pm2 jlist', { silent: true }, async (code, stdout, stderr) => {
-        try {
-            const list = JSON.parse(stdout);
-            const app = list.find(p => p.name === appName);
-            
-            if (!app) {
-                return ctx.editMessageText(`❌ Aplikasi *${appName}* tidak ditemukan di PM2.`, { parse_mode: 'Markdown' });
-            }
-
-            const appPath = app.pm2_env.pm_cwd; // Working Directory
-            
-            // 3. Execute GIT PULL
-            // Update status in the SAME message
-            await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n📂 Folder: \`${appPath}\`\n⬇️ Menjalankan git pull...`, { parse_mode: 'Markdown' });
-            
-            const gitCmd = `cd "${appPath}" && git pull`;
-            shell.exec(gitCmd, { silent: true }, async (gCode, gOut, gErr) => {
-                
-                const output = (gOut + '\n' + gErr).trim();
-
-                // Case 1: Already up to date
-                if (output.includes('Already up to date')) {
-                     return ctx.editMessageText(`✅ *Update Selesai: ${appName}*\n\nRepo sudah versi terbaru. Tidak ada perubahan.`, { parse_mode: 'Markdown' });
-                }
-
-                // Case 2: Git Error (Exit code !== 0)
-                if (gCode !== 0) {
-                    let reason = 'Unknown Error';
-                    if (output.includes('Conflict')) reason = '⚠️ Merge Conflict (Harus fix manual)';
-                    else if (output.includes('Permission denied')) reason = '🚫 Permission Denied (Cek SSH Key)';
-                    else if (output.includes('Could not resolve host')) reason = '🌐 Network Error / Timeout';
-                    else if (output.includes('Please commit your changes')) reason = '⚠️ Ada perubahan lokal yang belum di-commit';
-                    
-                    return ctx.editMessageText(`❌ *Git Pull Gagal!*\n\n*Alasan:* ${reason}\n\n*Log Detail:*\n\`\`\`\n${output.substring(0, 1000)}\n\`\`\``, { parse_mode: 'Markdown' });
-                }
-
-                // Case 3: Success Update -> Proceed to PM2 Restart
-                const gitStatus = gOut.trim().substring(0, 200);
-                
-                // Update status: Git Success -> Restarting PM2
-                await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n✅ Git Pull Berhasil!\n🔄 Restarting PM2 process...`, { parse_mode: 'Markdown' });
-                
-                shell.exec(`pm2 restart ${appName}`, { silent: true }, (pCode, pOut, pErr) => {
-                    if (pCode === 0) {
-                        // Final Success Message
-                        ctx.editMessageText(`🎉 *UPDATE SUKSES!* ✅\n\n📦 App: *${appName}*\n📝 Git: _${gitStatus}_\n🔄 PM2: Restarted`, { parse_mode: 'Markdown' });
-                    } else {
-                        // PM2 Failed
-                        ctx.editMessageText(`⚠️ *Git berhasil, tapi PM2 Restart gagal.*\nError: ${pErr}`, { parse_mode: 'Markdown' });
-                    }
-                });
+    // Helper for async shell exec
+    const execPromise = (cmd) => {
+        return new Promise((resolve) => {
+            shell.exec(cmd, { silent: true }, (code, stdout, stderr) => {
+                resolve({ code, stdout, stderr });
             });
+        });
+    };
 
-        } catch (e) {
-            console.error(e);
-            ctx.editMessageText('❌ Terjadi kesalahan sistem saat update.', { parse_mode: 'Markdown' });
+    try {
+        await ctx.editMessageText(`⏳ *Memulai Update: ${appName}*...`, { parse_mode: 'Markdown' });
+
+        // 1. Get App Path from PM2
+        const pm2Res = await execPromise('pm2 jlist');
+        if (pm2Res.code !== 0) throw new Error('Gagal mengambil data PM2');
+
+        const list = JSON.parse(pm2Res.stdout);
+        const app = list.find(p => p.name === appName);
+        
+        if (!app) {
+            return ctx.editMessageText(`❌ Aplikasi *${appName}* tidak ditemukan di PM2.`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
         }
-    });
+
+        const appPath = app.pm2_env.pm_cwd;
+        
+        // 2. Execute GIT PULL
+        await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n📂 Folder: \`${appPath}\`\n⬇️ Menjalankan git pull...`, { parse_mode: 'Markdown' });
+        
+        const gitCmd = `cd "${appPath}" && git pull`;
+        const gitRes = await execPromise(gitCmd);
+        const output = (gitRes.stdout + '\n' + gitRes.stderr).trim();
+
+        // Check result
+        if (output.includes('Already up to date')) {
+            return ctx.editMessageText(`✅ *Update Selesai: ${appName}*\n\nRepo sudah versi terbaru. Tidak ada perubahan.`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+
+        if (gitRes.code !== 0) {
+            let reason = 'Unknown Error';
+            if (output.includes('Conflict')) reason = '⚠️ Merge Conflict (Harus fix manual)';
+            else if (output.includes('Permission denied')) reason = '🚫 Permission Denied (Cek SSH Key)';
+            else if (output.includes('Could not resolve host')) reason = '🌐 Network Error / Timeout';
+            else if (output.includes('Please commit your changes')) reason = '⚠️ Ada perubahan lokal yang belum di-commit';
+            else if (output.includes('not a git repository')) reason = '⚠️ Folder bukan git repository';
+            
+            return ctx.editMessageText(`❌ *Git Pull Gagal!*\n\n*Alasan:* ${reason}\n\n*Log Detail:*\n\`\`\`\n${output.substring(0, 1000)}\n\`\`\``, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+
+        // 3. Success Update -> Restart PM2
+        const gitStatus = gitRes.stdout.trim().substring(0, 200);
+        await ctx.editMessageText(`⏳ *Update: ${appName}*\n\n✅ Git Pull Berhasil!\n🔄 Restarting PM2 process...`, { parse_mode: 'Markdown' });
+        
+        const pm2Restart = await execPromise(`pm2 restart ${appName}`);
+        
+        if (pm2Restart.code === 0) {
+            ctx.editMessageText(`🎉 *UPDATE SUKSES!* ✅\n\n📦 App: *${appName}*\n📝 Git: _${gitStatus}_\n🔄 PM2: Restarted`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        } else {
+            ctx.editMessageText(`⚠️ *Git berhasil, tapi PM2 Restart gagal.*\nError: ${pm2Restart.stderr}`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+
+    } catch (e) {
+        console.error(e);
+        ctx.editMessageText(`❌ Terjadi kesalahan sistem saat update.\n${e.message}`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
+    }
 });
 
 // Helper to delete message
@@ -947,7 +1014,10 @@ bot.command('deploy', async (ctx) => {
     const args = ctx.message.text.split(' ');
     // /deploy <name> <repo> <port>
     if (args.length !== 4) {
-        return ctx.reply('⚠️ Format salah!\nGunakan: `/deploy <name> <repo_url> <port>`', { parse_mode: 'Markdown' });
+        return ctx.reply('⚠️ Format salah!\nGunakan: `/deploy <name> <repo_url> <port>`', { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     }
 
     const [_, name, repo, port] = args;
@@ -958,7 +1028,9 @@ bot.command('deploy', async (ctx) => {
     try {
         // 1. Check if app already exists
         if (fs.existsSync(appPath)) {
-            return ctx.reply(`❌ Aplikasi ${name} sudah ada! Gunakan nama lain atau delete terlebih dahulu.`);
+            return ctx.reply(`❌ Aplikasi ${name} sudah ada! Gunakan nama lain atau delete terlebih dahulu.`, {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
         }
 
         // 2. Clone Repo
@@ -1033,22 +1105,31 @@ server {
             ctx.reply('⚠️ Gagal reload Nginx. Cek config manual.');
         }
 
-        ctx.reply(`✅ *Deployment Berhasil!* 🎉\n\nApp: ${name}\nURL: http://${name}.${VPS_IP}.nip.io`, { parse_mode: 'Markdown' });
+        ctx.reply(`✅ *Deployment Berhasil!* 🎉\n\nApp: ${name}\nURL: http://${name}.${VPS_IP}.nip.io`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
 
     } catch (err) {
         console.error(err);
-        ctx.reply(`❌ Deployment Gagal:\n${err.message}`);
+        ctx.reply(`❌ Deployment Gagal:\n${err.message}`, {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
         // Cleanup if possible?
     }
 });
 
 bot.command('list', (ctx) => {
     shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
-        if (code !== 0) return ctx.reply('❌ Gagal mengambil list PM2.');
+        if (code !== 0) return ctx.reply('❌ Gagal mengambil list PM2.', {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
         
         try {
             const list = JSON.parse(stdout);
-            if (list.length === 0) return ctx.reply('📭 Tidak ada aplikasi yang berjalan.');
+            if (list.length === 0) return ctx.reply('📭 Tidak ada aplikasi yang berjalan.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
             
             let msg = '📋 *Active Applications:*\n\n';
             list.forEach(proc => {
@@ -1062,9 +1143,17 @@ bot.command('list', (ctx) => {
                 msg += `   Uptime: ${uptime} | Restarts: ${proc.pm2_env.restart_time}\n\n`;
             });
             
-            ctx.reply(msg, { parse_mode: 'Markdown' });
+            ctx.reply(msg, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([
+                    [Markup.button.callback('🔄 Refresh', 'list_apps')],
+                    [Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]
+                ])
+            });
         } catch (e) {
-            ctx.reply('❌ Error parsing PM2 data.');
+            ctx.reply('❌ Error parsing PM2 data.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
         }
     });
 });
@@ -1105,29 +1194,47 @@ bot.action('list_apps', (ctx) => {
 
 bot.command('stop', (ctx) => {
     const name = ctx.message.text.split(' ')[1];
-    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/stop myapp`');
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/stop myapp`', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     
     if (shell.exec(`pm2 stop ${name}`).code === 0) {
-        ctx.reply(`✅ App *${name}* stopped.`, { parse_mode: 'Markdown' });
+        ctx.reply(`✅ App *${name}* stopped.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     } else {
-        ctx.reply(`❌ Gagal stop app *${name}*.`, { parse_mode: 'Markdown' });
+        ctx.reply(`❌ Gagal stop app *${name}*.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     }
 });
 
 bot.command('restart', (ctx) => {
     const name = ctx.message.text.split(' ')[1];
-    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/restart myapp`');
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/restart myapp`', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     
     if (shell.exec(`pm2 restart ${name}`).code === 0) {
-        ctx.reply(`✅ App *${name}* restarted.`, { parse_mode: 'Markdown' });
+        ctx.reply(`✅ App *${name}* restarted.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     } else {
-        ctx.reply(`❌ Gagal restart app *${name}*.`, { parse_mode: 'Markdown' });
+        ctx.reply(`❌ Gagal restart app *${name}*.`, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
     }
 });
 
 bot.command('delete', (ctx) => {
     const name = ctx.message.text.split(' ')[1];
-    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/delete myapp`');
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/delete myapp`', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     
     ctx.reply(`🗑️ Menghapus aplikasi *${name}*...`, { parse_mode: 'Markdown' });
     
@@ -1151,7 +1258,10 @@ bot.command('delete', (ctx) => {
         ctx.reply(`✅ Folder aplikasi dihapus.`);
     }
     
-    ctx.reply(`✅ Aplikasi *${name}* berhasil dihapus dari PM2 dan Nginx.`, { parse_mode: 'Markdown' });
+    ctx.reply(`✅ Aplikasi *${name}* berhasil dihapus dari PM2 dan Nginx.`, { 
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
 });
 
 bot.command('logs', (ctx) => {
@@ -1159,7 +1269,9 @@ bot.command('logs', (ctx) => {
     const name = args[1];
     const lines = args[2] || 50;
     
-    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/logs myapp 20`');
+    if (!name) return ctx.reply('⚠️ Masukkan nama app. Contoh: `/logs myapp 20`', {
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+    });
     
     // PM2 logs are usually in ~/.pm2/logs/
     // We can try to use pm2 logs command but it streams. 
@@ -1174,7 +1286,9 @@ bot.command('logs', (ctx) => {
              try {
                  const list = JSON.parse(out);
                  const app = list.find(p => p.name === name);
-                 if (!app) return ctx.reply(`❌ App ${name} tidak ditemukan.`);
+                 if (!app) return ctx.reply(`❌ App ${name} tidak ditemukan.`, {
+                    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+                 });
                  
                  const logFile = app.pm2_env.pm_out_log_path;
                  const errFile = app.pm2_env.pm_err_log_path;
@@ -1184,13 +1298,21 @@ bot.command('logs', (ctx) => {
                  
                  if (logs.length > 4000) {
                      // Split if too long
-                     ctx.reply(`📜 *Logs for ${name} (truncated):*\n\n` + logs.substring(0, 4000), { parse_mode: 'Markdown' });
+                     ctx.reply(`📜 *Logs for ${name} (truncated):*\n\n` + logs.substring(0, 4000), { 
+                        parse_mode: 'Markdown',
+                        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+                     });
                  } else {
-                     ctx.reply(`📜 *Logs for ${name}:*\n\n` + logs, { parse_mode: 'Markdown' });
+                     ctx.reply(`📜 *Logs for ${name}:*\n\n` + logs, { 
+                        parse_mode: 'Markdown',
+                        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+                     });
                  }
                  
              } catch (e) {
-                 ctx.reply('❌ Gagal mengambil logs.');
+                 ctx.reply('❌ Gagal mengambil logs.', {
+                    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+                 });
              }
          });
     });
