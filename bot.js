@@ -5,7 +5,7 @@ const shell = require('shelljs');
 const fs = require('fs');
 const path = require('path');
 const { execSync, exec } = require('child_process');
-const puppeteer = require('puppeteer');
+// const puppeteer = require('puppeteer'); // Disable puppeteer by default to avoid MODULE_NOT_FOUND on startup
 
 // Configuration
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -1917,6 +1917,16 @@ bot.command('ss', async (ctx) => {
     const msg = await ctx.reply(`📸 *Taking Screenshot...*\n\n🔗 ${targetUrl}\n🖥️ Mode: Desktop (1920x1080)`, { parse_mode: 'Markdown' });
 
     try {
+        // Dynamic import for puppeteer to prevent crash if not installed
+        let puppeteer;
+        try {
+            puppeteer = require('puppeteer');
+        } catch (e) {
+            return ctx.editMessageText('❌ Module `puppeteer` belum terinstall.\nSilakan jalankan `npm install puppeteer` di VPS.', {
+                 ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+
         const browser = await puppeteer.launch({
             args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for running as root in VPS
             headless: 'new'
