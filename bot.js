@@ -106,58 +106,64 @@ const deployWizard = new Scenes.WizardScene(
                 throw new Error(`Git Clone Failed:\n${cloneRes.stderr}`);
             }
 
-            // 2. Install Dependencies
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n📦 Installing dependencies...`);
-            let installCmd = '';
+            // 2. Detect App Type & Install Dependencies
+            await updateStatus(`⚙️ *Deployment: ${name}*\n\n� Detecting application type...`);
             
-            if (fs.existsSync(path.join(appPath, 'package.json'))) {
-                installCmd = `cd ${appPath} && npm install`;
-            } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
-                installCmd = `cd ${appPath} && pip install -r requirements.txt`;
-            }
-            
-            if (installCmd) {
-                const installRes = shell.exec(installCmd, { silent: true });
-                if (installRes.code !== 0) {
-                    throw new Error(`Install Failed:\n${installRes.stderr.substring(0, 500)}...`); // Truncate long logs
-                }
-            }
-
-            // 3. Start PM2
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔥 Starting process...`);
+            let isStatic = false;
             let script = 'index.js';
             const pkgPath = path.join(appPath, 'package.json');
+            
             if (fs.existsSync(pkgPath)) {
                 const pkg = require(pkgPath);
                 script = pkg.main || 'index.js';
                 if (pkg.scripts && pkg.scripts.start) script = 'npm -- start';
+                
+                // Even with package.json, if the script doesn't exist, it might be a static site with a package.json (like for build tools)
+                // But usually, if package.json exists, we want to run npm install
             }
-            
-            const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
-            const startRes = shell.exec(startCmd, { silent: true });
-            if (startRes.code !== 0) {
-                // If PM2 failed because script not found, try to deploy as static site
-                if (startRes.stderr.includes('Script not found')) {
-                     await updateStatus(`⚠️ *PM2 Gagal (Script not found)*\n\n🔄 Mencoba deploy sebagai *Static Web*...`);
-                     
-                     // Just serve the folder using 'serve' or simple http-server
-                     // Or better: let Nginx handle it directly without PM2 for static files
-                     // BUT, to keep consistent PORT management, we can use 'serve' package
-                     
-                     // Check if 'serve' is installed
-                     if (!shell.which('serve')) {
-                         shell.exec('npm install -g serve', { silent: true });
-                     }
-                     
-                     // Start 'serve' on the port
-                     const staticCmd = `pm2 start serve --name ${name} -- -s ${appPath} -l ${port}`;
-                     const staticRes = shell.exec(staticCmd, { silent: true });
-                     
-                     if (staticRes.code !== 0) {
-                         throw new Error(`Static Deploy Failed:\n${staticRes.stderr}`);
-                     }
-                } else {
+
+            // Check if the script exists
+            const scriptPath = script.includes('npm --') ? pkgPath : path.join(appPath, script);
+            if (!fs.existsSync(scriptPath) && !script.includes('npm --')) {
+                isStatic = true;
+            }
+
+            if (!isStatic) {
+                await updateStatus(`⚙️ *Deployment: ${name}*\n\n� Installing dependencies...`);
+                let installCmd = '';
+                
+                if (fs.existsSync(pkgPath)) {
+                    installCmd = `cd ${appPath} && npm install`;
+                } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
+                    installCmd = `cd ${appPath} && pip install -r requirements.txt`;
+                }
+                
+                if (installCmd) {
+                    const installRes = shell.exec(installCmd, { silent: true });
+                    if (installRes.code !== 0) {
+                        throw new Error(`Install Failed:\n${installRes.stderr.substring(0, 500)}...`);
+                    }
+                }
+
+                // 3. Start PM2 (Backend)
+                await updateStatus(`⚙️ *Deployment: ${name}*\n\n� Starting backend process...`);
+                const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
+                const startRes = shell.exec(startCmd, { silent: true });
+                if (startRes.code !== 0) {
                     throw new Error(`PM2 Start Failed:\n${startRes.stderr}`);
+                }
+            } else {
+                // 3. Start PM2 (Static)
+                await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Starting static web server...`);
+                
+                if (!shell.which('serve')) {
+                    shell.exec('npm install -g serve', { silent: true });
+                }
+                
+                const staticCmd = `pm2 start serve --name ${name} -- -s ${appPath} -l ${port}`;
+                const staticRes = shell.exec(staticCmd, { silent: true });
+                if (staticRes.code !== 0) {
+                    throw new Error(`Static Deploy Failed:\n${staticRes.stderr}`);
                 }
             }
             shell.exec('pm2 save');
