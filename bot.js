@@ -1188,12 +1188,14 @@ bot.action('start_screenshot', (ctx) => {
 });
 
 bot.action('install_puppeteer_deps', (ctx) => {
-    ctx.reply('🛠️ *Installing Dependencies...*\n\nMohon tunggu, sedang menjalankan `apt-get install` untuk library Chrome/Puppeteer...', { parse_mode: 'Markdown' });
+    ctx.reply('🛠️ *Installing Dependencies...*\n\nMohon tunggu, sedang menjalankan `apt-get install` untuk library Chrome/Puppeteer (Support Ubuntu 24.04+)...', { parse_mode: 'Markdown' });
     
-    // Standard Puppeteer dependencies for Debian/Ubuntu
-    const deps = "ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget xdg-utils";
+    // Standard Puppeteer dependencies (Updated for Ubuntu 24.04 / Debian Trixie)
+    // Replaced libasound2 -> libasound2t64, libgtk-3-0 -> libgtk-3-0t64
+    const deps = "ca-certificates fonts-liberation libasound2t64 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0t64 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget xdg-utils";
     
-    const cmd = `sudo apt-get update && sudo apt-get install -y ${deps}`;
+    // Fallback command: Try new packages first, if fail, try old packages (for older Ubuntu)
+    const cmd = `sudo apt-get update && (sudo apt-get install -y ${deps} || sudo apt-get install -y ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget xdg-utils)`;
     
     exec(cmd, (error, stdout, stderr) => {
         if (error) {
