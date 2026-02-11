@@ -178,24 +178,72 @@ const deployWizard = new Scenes.WizardScene(
             }
             shell.exec('pm2 save');
 
-            // 4. Setup Nginx (Skipped based on user preference)
-            // Cleanup existing Nginx config to avoid confusion
+            // 4. Setup Nginx & SSL
+            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Configuring Nginx & SSL...`);
+            
+            // Clean up old configs first
             const configPath = path.join(NGINX_AVAILABLE, name);
             const enabledPath = path.join(NGINX_ENABLED, name);
+            if (fs.existsSync(configPath)) shell.rm(configPath);
+            if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
+
+            // Nginx Config for HTTP (Port 80)
+            const domain = `${name}.${VPS_IP}.nip.io`;
+            const nginxConfig = `
+server {
+    listen 80;
+    server_name ${domain};
+
+    location / {
+        proxy_pass http://localhost:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
+`;
+            fs.writeFileSync(configPath, nginxConfig);
+            shell.exec(`ln -s ${configPath} ${enabledPath}`);
             
-            if (fs.existsSync(configPath) || fs.existsSync(enabledPath)) {
-                await updateStatus(`⚙️ *Deployment: ${name}*\n\n🧹 Cleaning up old Nginx configs...`);
-                if (fs.existsSync(configPath)) shell.rm(configPath);
-                if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
-                shell.exec('sudo systemctl reload nginx', { silent: true });
+            const nginxReload = shell.exec('sudo systemctl reload nginx');
+            if (nginxReload.code !== 0) {
+                 await updateStatus('⚠️ Nginx reload failed. Cek config manual.');
             }
 
-            /* 
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Configuring Nginx...`);
-            // ... (Nginx Config Code) ...
-            */
+            // 5. Auto SSL with Certbot
+            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔒 Requesting SSL Certificate...`);
+            
+            // Check if certbot is installed
+            if (!shell.which('certbot')) {
+                await updateStatus('⚠️ Certbot tidak ditemukan. Menginstall certbot...');
+                shell.exec('sudo apt-get install certbot python3-certbot-nginx -y', { silent: true });
+            }
 
-            await updateStatus(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: http://${VPS_IP}:${port}\n🔌 Port: ${port}`);
+            // Run Certbot
+            // --nginx: use nginx plugin
+            // --non-interactive: no user input
+            // --agree-tos: agree to terms
+            // --redirect: force HTTPS
+            // -m: email (required) - using dummy/admin email
+            // -d: domain
+            const certCmd = `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --redirect -m admin@${domain}`;
+            const certRes = shell.exec(certCmd, { silent: true });
+            
+            let finalUrl = `http://${domain}`;
+            let sslStatus = '❌ SSL Failed';
+
+            if (certRes.code === 0) {
+                finalUrl = `https://${domain}`;
+                sslStatus = '✅ SSL Secured';
+            } else {
+                console.error('Certbot Error:', certRes.stderr);
+                // Fallback to HTTP if SSL fails (maybe rate limit or DNS issue)
+                sslStatus = '⚠️ SSL Failed (Check Logs)';
+            }
+
+            await updateStatus(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: ${finalUrl}\n🔒 Status: ${sslStatus}\n🔌 Port: ${port}`);
             
         } catch (err) {
             console.error(err);
