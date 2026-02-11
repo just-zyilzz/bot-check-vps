@@ -5,6 +5,7 @@ const shell = require('shelljs');
 const fs = require('fs');
 const path = require('path');
 const { execSync, exec } = require('child_process');
+const puppeteer = require('puppeteer');
 
 // Configuration
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -73,8 +74,8 @@ const deployWizard = new Scenes.WizardScene(
         ctx.reply('📝 *Nama Aplikasi*\n\nBerikan nama untuk aplikasi ini (tanpa spasi).\n(Contoh: my-api)', { parse_mode: 'Markdown' });
         return ctx.wizard.next();
     },
-    // Step 3: Auto Port & Execute
-    async (ctx) => {
+    // Step 3: Ask for Domain Preference
+    (ctx) => {
         if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan nama valid.');
         const name = ctx.message.text.trim().replace(/\s+/g, '-').toLowerCase();
         
@@ -85,9 +86,55 @@ const deployWizard = new Scenes.WizardScene(
         }
         
         ctx.wizard.state.data.name = name;
+
+        // Ask about domain
+        ctx.reply('🌐 *Pengaturan Domain*\n\nApakah Anda memiliki domain sendiri?\n\n- **Ya**: Gunakan domain custom (cth: `myapp.com`).\n- **Tidak**: Gunakan auto domain (cth: `myapp.ip.nip.io`).', 
+            Markup.keyboard([['✅ Ya, Punya', '❌ Tidak, Pakai Auto (nip.io)']]).oneTime().resize()
+        );
+        return ctx.wizard.next();
+    },
+    // Step 4: Handle Domain Input
+    (ctx) => {
+        if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Silakan pilih Ya atau Tidak.');
+        const answer = ctx.message.text;
+
+        if (answer.includes('Tidak')) {
+            // Auto Domain
+            ctx.wizard.state.data.domain_mode = 'auto';
+            ctx.reply('✅ Menggunakan **Auto Domain** (nip.io).', { parse_mode: 'Markdown', ...Markup.removeKeyboard() });
+            
+            // Skip next step (custom domain input)
+            ctx.wizard.selectStep(4);
+            return ctx.wizard.steps[4](ctx);
+        } else {
+            // Custom Domain
+            ctx.wizard.state.data.domain_mode = 'custom';
+            ctx.reply('📝 *Masukkan Nama Domain Anda*\n\nPastikan Anda sudah membuat **A Record** di DNS Manager yang mengarah ke IP VPS ini.\n\nContoh: `myapp.com` atau `api.mysite.com`', { parse_mode: 'Markdown', ...Markup.removeKeyboard() });
+            return ctx.wizard.next();
+        }
+    },
+    // Step 5: Get Custom Domain & Execute
+    (ctx) => {
+        if (ctx.wizard.state.data.domain_mode === 'custom') {
+             if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan nama domain valid.');
+             const domain = ctx.message.text.trim().toLowerCase();
+             // Simple regex validation
+             if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
+                 return ctx.reply('⚠️ Format domain tidak valid. Contoh: `example.com`');
+             }
+             ctx.wizard.state.data.domain = domain;
+        }
+
+        return ctx.wizard.steps[5](ctx); // Go to actual deployment step (index 5)
+    },
+    // Step 6: Deployment Process
+    async (ctx) => {
+        // Remove keyboard just in case
+        
+        const { name, repo } = ctx.wizard.state.data;
         
         // AUTO PORT DETECTION
-        const statusMsg = await ctx.reply('🔍 Mencari port yang tersedia...');
+        const statusMsg = await ctx.reply('🔍 Mencari port yang tersedia...', Markup.removeKeyboard());
         
         // Helper to update status
         const updateStatus = async (text) => {
@@ -101,10 +148,16 @@ const deployWizard = new Scenes.WizardScene(
         const port = await getAvailablePort(3000);
         ctx.wizard.state.data.port = port;
         
-        const { repo } = ctx.wizard.state.data;
+        // Determine Domain
+        let domain = '';
+        if (ctx.wizard.state.data.domain_mode === 'custom') {
+            domain = ctx.wizard.state.data.domain;
+        } else {
+            domain = `${name}.${VPS_IP}.nip.io`;
+        }
         
         // Start Deployment Process
-        await updateStatus(`⚙️ *Memulai Deployment...*\n\n📦 App: ${name}\n🔗 Repo: ${repo}\n🔌 Port: ${port} (Auto)`);
+        await updateStatus(`⚙️ *Memulai Deployment...*\n\n📦 App: ${name}\n🔗 Repo: ${repo}\n🌐 Domain: ${domain}\n🔌 Port: ${port}`);
         
         const appPath = path.join(APPS_DIR, name);
         
@@ -117,7 +170,7 @@ const deployWizard = new Scenes.WizardScene(
             }
 
             // 2. Detect App Type & Install Dependencies
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n� Detecting application type...`);
+            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔍 Detecting application type...`);
             
             let isStatic = false;
             let script = 'index.js';
@@ -127,9 +180,6 @@ const deployWizard = new Scenes.WizardScene(
                 const pkg = require(pkgPath);
                 script = pkg.main || 'index.js';
                 if (pkg.scripts && pkg.scripts.start) script = 'npm -- start';
-                
-                // Even with package.json, if the script doesn't exist, it might be a static site with a package.json (like for build tools)
-                // But usually, if package.json exists, we want to run npm install
             }
 
             // Check if the script exists
@@ -139,7 +189,7 @@ const deployWizard = new Scenes.WizardScene(
             }
 
             if (!isStatic) {
-                await updateStatus(`⚙️ *Deployment: ${name}*\n\n� Installing dependencies...`);
+                await updateStatus(`⚙️ *Deployment: ${name}*\n\n📦 Installing dependencies...`);
                 let installCmd = '';
                 
                 if (fs.existsSync(pkgPath)) {
@@ -156,7 +206,7 @@ const deployWizard = new Scenes.WizardScene(
                 }
 
                 // 3. Start PM2 (Backend)
-                await updateStatus(`⚙️ *Deployment: ${name}*\n\n� Starting backend process...`);
+                await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔥 Starting backend process...`);
                 const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
                 const startRes = shell.exec(startCmd, { silent: true });
                 if (startRes.code !== 0) {
@@ -188,7 +238,6 @@ const deployWizard = new Scenes.WizardScene(
             if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
 
             // Nginx Config for HTTP (Port 80)
-            const domain = `${name}.${VPS_IP}.nip.io`;
             const nginxConfig = `
 server {
     listen 80;
@@ -222,12 +271,6 @@ server {
             }
 
             // Run Certbot
-            // --nginx: use nginx plugin
-            // --non-interactive: no user input
-            // --agree-tos: agree to terms
-            // --redirect: force HTTPS
-            // -m: email (required) - using dummy/admin email
-            // -d: domain
             const certCmd = `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --redirect -m admin@${domain}`;
             const certRes = shell.exec(certCmd, { silent: true });
             
@@ -239,7 +282,6 @@ server {
                 sslStatus = '✅ SSL Secured';
             } else {
                 console.error('Certbot Error:', certRes.stderr);
-                // Fallback to HTTP if SSL fails (maybe rate limit or DNS issue)
                 sslStatus = '⚠️ SSL Failed (Check Logs)';
             }
 
@@ -307,7 +349,7 @@ const moreMenu = Markup.inlineKeyboard([
     [Markup.button.callback('🗄️ Database', 'status_db'), Markup.button.callback('🐳 Docker', 'status_docker')],
     [Markup.button.callback('📝 PM2 Logs', 'list_pm2_logs'), Markup.button.callback('🔄 System Update', 'sys_update')],
     [Markup.button.callback('📈 Top Processes', 'status_top'), Markup.button.callback('⚡ Server Actions', 'server_menu')],
-    [Markup.button.callback('🗑️ Delete App', 'delete_menu')],
+    [Markup.button.callback('🗑️ Delete App', 'delete_menu'), Markup.button.callback('📂 File Manager', 'file_manager')],
     [Markup.button.callback('⬅️ Kembali ke Menu Utama', 'back_to_main'), Markup.button.callback('❓ Help', 'help_msg')]
 ]);
 
@@ -1231,6 +1273,106 @@ bot.action(/do_delete:(.+)/, (ctx) => {
     });
 });
 
+// --- File Manager (Simple Explorer) ---
+bot.action('file_manager', (ctx) => {
+    // Start from APPS_DIR
+    listFiles(ctx, APPS_DIR);
+});
+
+bot.action(/fm_open:(.+)/, (ctx) => {
+    const targetPath = ctx.match[1];
+    listFiles(ctx, targetPath);
+});
+
+bot.action(/fm_read:(.+)/, (ctx) => {
+    const filePath = ctx.match[1];
+    
+    // Security check: only allow reading files inside APPS_DIR or common config paths
+    if (!filePath.startsWith(APPS_DIR) && !filePath.startsWith('/etc/nginx')) {
+        return ctx.answerCbQuery('⛔ Akses ditolak.', { show_alert: true });
+    }
+
+    try {
+        if (fs.statSync(filePath).size > 50000) { // Limit 50KB
+            return ctx.reply(`⚠️ File terlalu besar untuk ditampilkan di chat.\nPath: \`${filePath}\``);
+        }
+        
+        const content = fs.readFileSync(filePath, 'utf8');
+        const filename = path.basename(filePath);
+        
+        // Split if too long
+        if (content.length > 4000) {
+            ctx.reply(`📄 *${filename}* (Truncated):\n\`\`\`\n${content.substring(0, 4000)}\n\`\`\``, { parse_mode: 'Markdown' });
+        } else {
+            ctx.reply(`📄 *${filename}*:\n\`\`\`\n${content}\n\`\`\``, { parse_mode: 'Markdown' });
+        }
+        
+    } catch (e) {
+        ctx.reply(`❌ Gagal membaca file: ${e.message}`);
+    }
+});
+
+const listFiles = (ctx, dirPath) => {
+    try {
+        const items = fs.readdirSync(dirPath);
+        const buttons = [];
+        
+        // Add ".." button if not root of APPS_DIR
+        if (dirPath !== APPS_DIR && dirPath.startsWith(APPS_DIR)) {
+            const parentDir = path.dirname(dirPath);
+            buttons.push([Markup.button.callback('📂 .. (Up)', `fm_open:${parentDir}`)]);
+        }
+
+        // Folders first, then files
+        const folders = [];
+        const files = [];
+
+        items.forEach(item => {
+            try {
+                const fullPath = path.join(dirPath, item);
+                const stat = fs.statSync(fullPath);
+                if (stat.isDirectory()) {
+                    folders.push(item);
+                } else {
+                    files.push(item);
+                }
+            } catch (e) {}
+        });
+
+        // Limit items to prevent overflow (max 20)
+        const limit = 20;
+        let count = 0;
+
+        folders.forEach(folder => {
+            if (count < limit) {
+                const p = path.join(dirPath, folder);
+                buttons.push([Markup.button.callback(`📂 ${folder}`, `fm_open:${p}`)]);
+                count++;
+            }
+        });
+
+        files.forEach(file => {
+            if (count < limit) {
+                const p = path.join(dirPath, file);
+                buttons.push([Markup.button.callback(`📄 ${file}`, `fm_read:${p}`)]);
+                count++;
+            }
+        });
+        
+        buttons.push([Markup.button.callback('⬅️ Kembali', 'show_more_menu')]);
+
+        ctx.editMessageText(`📂 *FILE MANAGER*\n\nPath: \`${dirPath}\``, {
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard(buttons)
+        });
+
+    } catch (e) {
+        ctx.editMessageText(`❌ Error akses folder: ${dirPath}`, {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+        });
+    }
+};
+
 // --- Update Apps Manager ---
 bot.action('list_updates', (ctx) => {
     ctx.editMessageText('🔄 *UPDATE MANAGER*\n\nSedang mengambil daftar aplikasi dari PM2...', { parse_mode: 'Markdown' });
@@ -1760,6 +1902,55 @@ bot.command('logs', (ctx) => {
              }
          });
     });
+});
+
+// --- Screenshot Web Action ---
+bot.command('ss', async (ctx) => {
+    const url = ctx.message.text.split(' ')[1];
+    
+    if (!url) {
+        return ctx.reply('⚠️ Masukkan URL. Contoh: `/ss https://google.com`');
+    }
+
+    const targetUrl = url.startsWith('http') ? url : `http://${url}`;
+    
+    const msg = await ctx.reply(`📸 *Taking Screenshot...*\n\n🔗 ${targetUrl}\n🖥️ Mode: Desktop (1920x1080)`, { parse_mode: 'Markdown' });
+
+    try {
+        const browser = await puppeteer.launch({
+            args: ['--no-sandbox', '--disable-setuid-sandbox'], // Required for running as root in VPS
+            headless: 'new'
+        });
+        const page = await browser.newPage();
+        
+        // Set Viewport to Desktop
+        await page.setViewport({ width: 1920, height: 1080 });
+        
+        await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        
+        const screenshotPath = path.join(__dirname, 'screenshot.png');
+        await page.screenshot({ path: screenshotPath, fullPage: false }); // fullPage: false ensures we see what's in viewport (Desktop view)
+        
+        await browser.close();
+        
+        // Send Photo
+        await ctx.replyWithPhoto({ source: screenshotPath }, {
+            caption: `📸 Screenshot: ${targetUrl}`,
+            reply_to_message_id: ctx.message.message_id
+        });
+        
+        // Cleanup
+        fs.unlinkSync(screenshotPath);
+        
+        // Delete status message
+        ctx.telegram.deleteMessage(ctx.chat.id, msg.message_id);
+
+    } catch (e) {
+        console.error(e);
+        ctx.editMessageText(`❌ Gagal mengambil screenshot:\n${e.message}`, {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
+    }
 });
 
 // Launch Bot with Retry Logic
