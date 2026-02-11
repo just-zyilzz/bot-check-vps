@@ -136,7 +136,29 @@ const deployWizard = new Scenes.WizardScene(
             const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
             const startRes = shell.exec(startCmd, { silent: true });
             if (startRes.code !== 0) {
-                throw new Error(`PM2 Start Failed:\n${startRes.stderr}`);
+                // If PM2 failed because script not found, try to deploy as static site
+                if (startRes.stderr.includes('Script not found')) {
+                     await updateStatus(`⚠️ *PM2 Gagal (Script not found)*\n\n🔄 Mencoba deploy sebagai *Static Web*...`);
+                     
+                     // Just serve the folder using 'serve' or simple http-server
+                     // Or better: let Nginx handle it directly without PM2 for static files
+                     // BUT, to keep consistent PORT management, we can use 'serve' package
+                     
+                     // Check if 'serve' is installed
+                     if (!shell.which('serve')) {
+                         shell.exec('npm install -g serve', { silent: true });
+                     }
+                     
+                     // Start 'serve' on the port
+                     const staticCmd = `pm2 start serve --name ${name} -- -s ${appPath} -l ${port}`;
+                     const staticRes = shell.exec(staticCmd, { silent: true });
+                     
+                     if (staticRes.code !== 0) {
+                         throw new Error(`Static Deploy Failed:\n${staticRes.stderr}`);
+                     }
+                } else {
+                    throw new Error(`PM2 Start Failed:\n${startRes.stderr}`);
+                }
             }
             shell.exec('pm2 save');
 
