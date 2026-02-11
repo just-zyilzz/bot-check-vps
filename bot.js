@@ -259,6 +259,7 @@ const moreMenu = Markup.inlineKeyboard([
     [Markup.button.callback('🗄️ Database', 'status_db'), Markup.button.callback('🐳 Docker', 'status_docker')],
     [Markup.button.callback('📝 PM2 Logs', 'list_pm2_logs'), Markup.button.callback('🔄 System Update', 'sys_update')],
     [Markup.button.callback('📈 Top Processes', 'status_top'), Markup.button.callback('⚡ Server Actions', 'server_menu')],
+    [Markup.button.callback('🗑️ Delete App', 'delete_menu')],
     [Markup.button.callback('⬅️ Kembali ke Menu Utama', 'back_to_main'), Markup.button.callback('❓ Help', 'help_msg')]
 ]);
 
@@ -1096,6 +1097,89 @@ bot.action(/view_logs:(.+)/, (ctx) => {
                 ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'list_pm2_logs')]])
             });
         }
+    });
+});
+
+// --- Delete App Manager ---
+bot.action('delete_menu', (ctx) => {
+    ctx.editMessageText('🗑️ *DELETE MANAGER*\n\nPilih aplikasi yang ingin dihapus permanen:', { parse_mode: 'Markdown' });
+
+    shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.editMessageText('❌ Gagal mengambil data PM2.', {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+        });
+
+        try {
+            const list = JSON.parse(stdout);
+            if (list.length === 0) return ctx.editMessageText('📭 Tidak ada aplikasi aktif.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+
+            const buttons = [];
+            list.forEach(app => {
+                // Prevent deleting the bot itself if possible, or warn user
+                const isSelf = app.name === 'vps-bot' || app.pm2_env.pm_cwd === process.cwd();
+                const icon = isSelf ? '⛔' : '🗑️';
+                const action = isSelf ? 'ignore' : `confirm_delete:${app.name}`;
+                
+                buttons.push([Markup.button.callback(`${icon} ${app.name}`, action)]);
+            });
+            
+            buttons.push([Markup.button.callback('⬅️ Kembali', 'show_more_menu')]);
+
+            ctx.editMessageText('🗑️ *Pilih Aplikasi untuk Dihapus:*', {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard(buttons)
+            });
+
+        } catch (e) {
+            console.error(e);
+            ctx.editMessageText('❌ Error parsing data.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        }
+    });
+});
+
+bot.action('ignore', (ctx) => {
+    ctx.answerCbQuery('⛔ Aplikasi ini tidak bisa dihapus dari sini.', { show_alert: true });
+});
+
+bot.action(/confirm_delete:(.+)/, (ctx) => {
+    const appName = ctx.match[1];
+    ctx.editMessageText(`⚠️ *KONFIRMASI PENGHAPUSAN*\n\nAnda yakin ingin menghapus aplikasi *${appName}*?\n\nTindakan ini akan:\n1. Stop & Delete dari PM2\n2. Hapus Config Nginx\n3. Hapus Folder Aplikasi (Permanen)`, { 
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+            [Markup.button.callback('✅ YA, HAPUS PERMANEN', `do_delete:${appName}`)],
+            [Markup.button.callback('❌ BATAL', 'delete_menu')]
+        ])
+    });
+});
+
+bot.action(/do_delete:(.+)/, (ctx) => {
+    const name = ctx.match[1];
+    ctx.editMessageText(`🗑️ Menghapus aplikasi *${name}*...`, { parse_mode: 'Markdown' });
+    
+    // 1. PM2 Delete
+    shell.exec(`pm2 delete ${name}`);
+    shell.exec('pm2 save');
+    
+    // 2. Remove Nginx Config
+    const configPath = path.join(NGINX_AVAILABLE, name);
+    const enabledPath = path.join(NGINX_ENABLED, name);
+    if (fs.existsSync(configPath)) shell.rm(configPath);
+    if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
+    shell.exec('sudo systemctl reload nginx');
+    
+    // 3. Remove Files
+    const appPath = path.join(APPS_DIR, name);
+    if (fs.existsSync(appPath)) {
+        shell.rm('-rf', appPath);
+    }
+    
+    ctx.editMessageText(`✅ Aplikasi *${name}* berhasil dihapus.`, { 
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'delete_menu')]])
     });
 });
 
