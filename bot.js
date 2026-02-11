@@ -299,7 +299,99 @@ server {
     }
 );
 
-const stage = new Scenes.Stage([deployWizard]);
+// --- SCREENSHOT WIZARD ---
+const screenshotWizard = new Scenes.WizardScene(
+    'screenshot_wizard',
+    // Step 1: Ask for URL
+    (ctx) => {
+        ctx.reply('📸 *SCREENSHOT WEB*\n\nSilakan kirimkan URL website yang ingin di-screenshot.\n(Contoh: https://google.com)', { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Batal', 'cancel_ss')]
+            ])
+        });
+        return ctx.wizard.next();
+    },
+    // Step 2: Process URL
+    async (ctx) => {
+        // Handle Cancel
+        if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_ss') {
+            await ctx.answerCbQuery();
+            ctx.reply('❌ Screenshot dibatalkan.', Markup.removeKeyboard());
+            return ctx.scene.leave();
+        }
+
+        if (!ctx.message || !ctx.message.text) {
+            ctx.reply('⚠️ Harap kirimkan URL valid.');
+            return;
+        }
+
+        let url = ctx.message.text.trim();
+        if (!url.startsWith('http')) url = `http://${url}`;
+
+        const statusMsg = await ctx.reply(`📸 *Taking Screenshot...*\n\n🔗 ${url}\n🖥️ Mode: Desktop (1920x1080)`, { parse_mode: 'Markdown' });
+
+        try {
+            // Dynamic import for puppeteer
+            let puppeteer;
+            try {
+                puppeteer = require('puppeteer');
+            } catch (e) {
+                ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
+                ctx.reply('❌ Module `puppeteer` belum terinstall.\nSilakan jalankan `npm install puppeteer` di VPS.', {
+                    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+                });
+                return ctx.scene.leave();
+            }
+
+            const browser = await puppeteer.launch({
+                args: ['--no-sandbox', '--disable-setuid-sandbox'],
+                headless: 'new'
+            });
+            const page = await browser.newPage();
+            
+            await page.setViewport({ width: 1920, height: 1080 });
+            await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+            
+            const screenshotPath = path.join(__dirname, `ss_${Date.now()}.png`);
+            await page.screenshot({ path: screenshotPath, fullPage: false });
+            
+            await browser.close();
+            
+            // Send Photo
+            await ctx.replyWithPhoto({ source: screenshotPath }, {
+                caption: `📸 Screenshot: ${url}`,
+                reply_to_message_id: ctx.message.message_id
+            });
+            
+            // Cleanup
+            fs.unlinkSync(screenshotPath);
+            ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
+
+        } catch (e) {
+            console.error(e);
+            ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
+            
+            let errorMsg = `❌ Gagal mengambil screenshot:\n${e.message}`;
+            let buttons = [[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]];
+
+            // Check for missing libraries error
+            if (e.message.includes('shared libraries') || e.message.includes('libnss3')) {
+                errorMsg += '\n\n⚠️ *Missing Dependencies Detected!*\nKlik tombol di bawah untuk menginstall library yang kurang.';
+                buttons.unshift([Markup.button.callback('🛠️ Fix Dependencies (Install Libs)', 'install_puppeteer_deps')]);
+            }
+
+            ctx.reply(errorMsg, {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard(buttons)
+            });
+        }
+
+        return ctx.scene.leave();
+    }
+);
+
+const stage = new Scenes.Stage([deployWizard, screenshotWizard]);
 const bot = new Telegraf(BOT_TOKEN);
 
 // Use Session & Stage
@@ -350,6 +442,7 @@ const moreMenu = Markup.inlineKeyboard([
     [Markup.button.callback('📝 PM2 Logs', 'list_pm2_logs'), Markup.button.callback('🔄 System Update', 'sys_update')],
     [Markup.button.callback('📈 Top Processes', 'status_top'), Markup.button.callback('⚡ Server Actions', 'server_menu')],
     [Markup.button.callback('🗑️ Delete App', 'delete_menu'), Markup.button.callback('📂 File Manager', 'file_manager')],
+    [Markup.button.callback('📸 Screenshot Web', 'start_screenshot')],
     [Markup.button.callback('⬅️ Kembali ke Menu Utama', 'back_to_main'), Markup.button.callback('❓ Help', 'help_msg')]
 ]);
 
@@ -1086,6 +1179,35 @@ bot.action('sys_update_confirm', (ctx) => {
             parse_mode: 'Markdown',
             ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
         });
+    });
+});
+
+// --- Screenshot Actions ---
+bot.action('start_screenshot', (ctx) => {
+    ctx.scene.enter('screenshot_wizard');
+});
+
+bot.action('install_puppeteer_deps', (ctx) => {
+    ctx.reply('🛠️ *Installing Dependencies...*\n\nMohon tunggu, sedang menjalankan `apt-get install` untuk library Chrome/Puppeteer...', { parse_mode: 'Markdown' });
+    
+    // Standard Puppeteer dependencies for Debian/Ubuntu
+    const deps = "ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget xdg-utils";
+    
+    const cmd = `sudo apt-get update && sudo apt-get install -y ${deps}`;
+    
+    exec(cmd, (error, stdout, stderr) => {
+        if (error) {
+            console.error(`Install error: ${error}`);
+            ctx.reply(`❌ *Install Gagal!*\n\nError:\n\`\`\`\n${stderr.substring(0, 1000)}\n\`\`\``, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
+            });
+        } else {
+            ctx.reply(`✅ *Dependencies Installed!*\n\nLibrary berhasil diinstall. Silakan coba fitur Screenshot lagi.`, { 
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard([[Markup.button.callback('📸 Coba Screenshot', 'start_screenshot')]])
+            });
+        }
     });
 });
 
