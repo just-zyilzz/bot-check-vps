@@ -16,26 +16,36 @@ const APPS_DIR = '/var/www';
 const NGINX_AVAILABLE = '/etc/nginx/sites-available';
 const NGINX_ENABLED = '/etc/nginx/sites-enabled';
 
+const net = require('net');
+
 // Helper to find available port
 const getAvailablePort = async (startPort = 3000) => {
+    const isPortAvailable = (port) => {
+        return new Promise((resolve) => {
+            const server = net.createServer();
+            server.once('error', (err) => {
+                if (err.code === 'EADDRINUSE') {
+                    resolve(false);
+                } else {
+                    resolve(false); // Other error, assume unsafe
+                }
+            });
+            server.once('listening', () => {
+                server.close(() => {
+                    resolve(true);
+                });
+            });
+            server.listen(port);
+        });
+    };
+
     let port = startPort;
     while (true) {
-        try {
-            // Check if port is in use using 'lsof' or 'netstat' logic via shell
-            // Simple check: try to listen or check netstats. 
-            // Using systeminformation for cleaner approach
-            const connections = await si.networkConnections();
-            const usedPorts = connections.map(c => c.localPort);
-            
-            if (!usedPorts.includes(port)) {
-                return port;
-            }
-            port++;
-        } catch (e) {
-            console.error('Error checking ports:', e);
-            // Fallback simple increment if check fails
-            return port + Math.floor(Math.random() * 100); 
+        if (await isPortAvailable(port)) {
+            return port;
         }
+        port++;
+        if (port > 65535) throw new Error('No ports available');
     }
 };
 
@@ -168,33 +178,24 @@ const deployWizard = new Scenes.WizardScene(
             }
             shell.exec('pm2 save');
 
-            // 4. Setup Nginx
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Configuring Nginx...`);
-            const nginxConfig = `
-server {
-    listen 80;
-    server_name ${name}.${VPS_IP}.nip.io;
-
-    location / {
-        proxy_pass http://localhost:${port};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-}
-`;
+            // 4. Setup Nginx (Skipped based on user preference)
+            // Cleanup existing Nginx config to avoid confusion
             const configPath = path.join(NGINX_AVAILABLE, name);
-            fs.writeFileSync(configPath, nginxConfig);
-            shell.exec(`ln -s ${configPath} ${path.join(NGINX_ENABLED, name)}`);
+            const enabledPath = path.join(NGINX_ENABLED, name);
             
-            const nginxReload = shell.exec('sudo systemctl reload nginx');
-            if (nginxReload.code !== 0) {
-                 await updateStatus('⚠️ Nginx reload failed. Cek config manual.');
+            if (fs.existsSync(configPath) || fs.existsSync(enabledPath)) {
+                await updateStatus(`⚙️ *Deployment: ${name}*\n\n🧹 Cleaning up old Nginx configs...`);
+                if (fs.existsSync(configPath)) shell.rm(configPath);
+                if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
+                shell.exec('sudo systemctl reload nginx', { silent: true });
             }
 
-            await updateStatus(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: http://${name}.${VPS_IP}.nip.io\n🔌 Port: ${port}`);
+            /* 
+            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Configuring Nginx...`);
+            // ... (Nginx Config Code) ...
+            */
+
+            await updateStatus(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: http://${VPS_IP}:${port}\n🔌 Port: ${port}`);
             
         } catch (err) {
             console.error(err);
