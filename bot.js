@@ -4,6 +4,7 @@ const si = require('systeminformation');
 const shell = require('shelljs');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync, exec } = require('child_process');
 // const puppeteer = require('puppeteer'); // Disable puppeteer by default to avoid MODULE_NOT_FOUND on startup
 
@@ -353,7 +354,8 @@ const screenshotWizard = new Scenes.WizardScene(
             await page.setViewport({ width: 1920, height: 1080 });
             await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
             
-            const screenshotPath = path.join(__dirname, `ss_${Date.now()}.png`);
+            // Use os.tmpdir() to avoid triggering PM2 watch restart
+            const screenshotPath = path.join(os.tmpdir(), `ss_${Date.now()}.png`);
             await page.screenshot({ path: screenshotPath, fullPage: false });
             
             await browser.close();
@@ -2062,7 +2064,8 @@ bot.command('ss', async (ctx) => {
         
         await page.goto(targetUrl, { waitUntil: 'networkidle2', timeout: 30000 });
         
-        const screenshotPath = path.join(__dirname, 'screenshot.png');
+        // Use os.tmpdir() to avoid triggering PM2 watch restart
+        const screenshotPath = path.join(os.tmpdir(), 'screenshot.png');
         await page.screenshot({ path: screenshotPath, fullPage: false }); // fullPage: false ensures we see what's in viewport (Desktop view)
         
         await browser.close();
