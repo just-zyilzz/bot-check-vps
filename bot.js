@@ -393,7 +393,63 @@ const screenshotWizard = new Scenes.WizardScene(
     }
 );
 
-const stage = new Scenes.Stage([deployWizard, screenshotWizard]);
+// --- SHELL WIZARD ---
+const shellWizard = new Scenes.WizardScene(
+    'shell_wizard',
+    (ctx) => {
+        ctx.reply('💻 *TERMINAL MODE*\n\nKetik perintah Linux apa saja (seperti di SSH).\nKetik `exit` atau `cancel` untuk keluar.\n\n⚠️ *Warning:* Hati-hati dengan perintah berbahaya (rm -rf, reboot, dll).', { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('❌ Exit Terminal', 'cancel_shell')]
+            ])
+        });
+        return ctx.wizard.next();
+    },
+    async (ctx) => {
+        // Check for cancel callback
+        if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_shell') {
+            await ctx.answerCbQuery();
+            ctx.reply('🚪 Terminal Mode ditutup.', Markup.removeKeyboard());
+            return ctx.scene.leave();
+        }
+
+        if (!ctx.message || !ctx.message.text) return;
+        const cmd = ctx.message.text.trim();
+        
+        if (['exit', 'cancel', '/cancel'].includes(cmd.toLowerCase())) {
+            ctx.reply('🚪 Terminal Mode ditutup.');
+            return ctx.scene.leave();
+        }
+
+        const msg = await ctx.reply(`⏳ Executing: \`${cmd}\`...`, { parse_mode: 'Markdown' });
+        
+        // Execute command
+        exec(cmd, { timeout: 30000, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+            let output = (stdout || '') + (stderr || '');
+            if (!output) output = 'No output';
+            
+            // Format output
+            if (output.length > 4000) {
+                const truncated = output.substring(0, 4000) + '\n... (truncated)';
+                ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `💻 \`$ ${cmd}\`\n\n\`\`\`\n${truncated}\n\`\`\``, { parse_mode: 'Markdown' });
+            } else {
+                ctx.telegram.editMessageText(ctx.chat.id, msg.message_id, null, `💻 \`$ ${cmd}\`\n\n\`\`\`\n${output}\n\`\`\``, { parse_mode: 'Markdown' });
+            }
+        });
+        
+        // Stay in wizard loop
+        // We don't return ctx.wizard.next() because we want to stay in this step
+        // But in WizardScene, the current step handler is re-executed if we don't advance? 
+        // No, in Telegraf Scenes, wizard stays in current step unless next() is called or selectStep()
+        // Wait, actually wizard scenes advance automatically if we return next(). 
+        // If we want to loop, we need to stay. 
+        // Actually, wizard steps are linear. For a loop (REPL), we should use a simple Scene or just stay in step 1.
+        // Let's use `ctx.wizard.selectStep(1)` to loop back to this handler.
+        return; 
+    }
+);
+
+const stage = new Scenes.Stage([deployWizard, screenshotWizard, shellWizard]);
 const bot = new Telegraf(BOT_TOKEN);
 
 // Use Session & Stage
@@ -444,8 +500,9 @@ const moreMenu = Markup.inlineKeyboard([
     [Markup.button.callback('📝 PM2 Logs', 'list_pm2_logs'), Markup.button.callback('🔄 System Update', 'sys_update')],
     [Markup.button.callback('📈 Top Processes', 'status_top'), Markup.button.callback('⚡ Server Actions', 'server_menu')],
     [Markup.button.callback('🗑️ Delete App', 'delete_menu'), Markup.button.callback('📂 File Manager', 'file_manager')],
-    [Markup.button.callback('📸 Screenshot Web', 'start_screenshot')],
-    [Markup.button.callback('⬅️ Kembali ke Menu Utama', 'back_to_main'), Markup.button.callback('❓ Help', 'help_msg')]
+    [Markup.button.callback('📸 Screenshot Web', 'start_screenshot'), Markup.button.callback('📦 Backup App', 'backup_menu')],
+    [Markup.button.callback('💻 Terminal', 'start_shell'), Markup.button.callback('⬅️ Kembali ke Menu Utama', 'back_to_main')],
+    [Markup.button.callback('❓ Help', 'help_msg')]
 ]);
 
 bot.start((ctx) => {
@@ -2088,6 +2145,128 @@ bot.command('ss', async (ctx) => {
             ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
         });
     }
+});
+
+// --- Backup Manager ---
+bot.action('backup_menu', (ctx) => {
+    ctx.editMessageText('📦 *BACKUP APP*\n\nSedang mengambil daftar aplikasi...', { parse_mode: 'Markdown' });
+
+    shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) return ctx.editMessageText('❌ Gagal mengambil data PM2.', {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+        });
+
+        try {
+            const list = JSON.parse(stdout);
+            if (list.length === 0) return ctx.editMessageText('📭 Tidak ada aplikasi aktif.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+            });
+
+            const buttons = [];
+            list.forEach(app => {
+                buttons.push([Markup.button.callback(`📦 ${app.name}`, `backup_app:${app.name}`)]);
+            });
+            
+            buttons.push([Markup.button.callback('⬅️ Kembali', 'show_more_menu')]);
+
+            ctx.editMessageText('📦 *Pilih Aplikasi untuk Backup:*\n(Akan di-zip tanpa node_modules)', {
+                parse_mode: 'Markdown',
+                ...Markup.inlineKeyboard(buttons)
+            });
+
+        } catch (e) {
+            ctx.editMessageText('❌ Error parsing data.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+            });
+        }
+    });
+});
+
+bot.action(/backup_app:(.+)/, async (ctx) => {
+    const appName = ctx.match[1];
+    
+    // Initial feedback
+    await ctx.editMessageText(`⏳ *Preparing Backup: ${appName}*...`, { parse_mode: 'Markdown' });
+
+    shell.exec('pm2 jlist', { silent: true }, (code, stdout, stderr) => {
+        if (code !== 0) {
+            return ctx.editMessageText('❌ Gagal akses PM2.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'backup_menu')]])
+            });
+        }
+        
+        try {
+            const list = JSON.parse(stdout);
+            const app = list.find(p => p.name === appName);
+            if (!app) {
+                return ctx.editMessageText(`❌ App ${appName} tidak ditemukan.`, {
+                    ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'backup_menu')]])
+                });
+            }
+            
+            const appPath = app.pm2_env.pm_cwd;
+            const backupName = `${appName}_backup_${Date.now()}.tar.gz`;
+            const backupPath = path.join(os.tmpdir(), backupName);
+            
+            // Tar command: exclude node_modules, .git
+            // Use quotes for paths to handle spaces
+            const cmd = `tar --exclude=node_modules --exclude=.git -czf "${backupPath}" -C "${appPath}" .`;
+            
+            ctx.editMessageText(`⏳ *Compressing...*\nSource: \`${appPath}\``, { parse_mode: 'Markdown' });
+            
+            shell.exec(cmd, { silent: true }, async (c, out, err) => {
+                if (c !== 0) {
+                     return ctx.editMessageText(`❌ Backup Gagal:\n${err}`, {
+                        parse_mode: 'Markdown',
+                        ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'backup_menu')]])
+                    });
+                }
+                
+                try {
+                    // Check size
+                    if (!fs.existsSync(backupPath)) {
+                        throw new Error('File backup tidak terbuat.');
+                    }
+
+                    const stats = fs.statSync(backupPath);
+                    const sizeMB = stats.size / (1024 * 1024);
+                    
+                    if (sizeMB > 49) { // Telegram limit ~50MB
+                         await ctx.editMessageText(`⚠️ *Backup Terlalu Besar* (${sizeMB.toFixed(2)} MB).\nBot tidak bisa mengirim file > 50MB.\n\nFile tersimpan di VPS: \`${backupPath}\``, {
+                            parse_mode: 'Markdown',
+                            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'backup_menu')]])
+                        });
+                    } else {
+                        await ctx.replyWithDocument({ source: backupPath, filename: backupName }, {
+                            caption: `📦 Backup: ${appName}\n📅 ${new Date().toLocaleString()}\n💾 Size: ${sizeMB.toFixed(2)} MB`
+                        });
+                        
+                        // Cleanup
+                        fs.unlinkSync(backupPath);
+                        
+                        await ctx.editMessageText(`✅ *Backup ${appName} Terkirim!*`, {
+                            parse_mode: 'Markdown',
+                            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'backup_menu')]])
+                        });
+                    }
+                } catch (sendErr) {
+                    console.error(sendErr);
+                    ctx.reply(`❌ Gagal mengirim file: ${sendErr.message}`);
+                }
+            });
+            
+        } catch (e) {
+            console.error(e);
+            ctx.editMessageText(`❌ Error: ${e.message}`, {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'backup_menu')]])
+            });
+        }
+    });
+});
+
+// --- Shell Launcher ---
+bot.action('start_shell', (ctx) => {
+    ctx.scene.enter('shell_wizard');
 });
 
 // Launch Bot with Retry Logic
