@@ -510,23 +510,32 @@ const getProgressBar = (percent, length = 10) => {
 
 // --- Menu Handlers ---
 const mainMenu = Markup.inlineKeyboard([
-    [Markup.button.callback('📊 Status VPS', 'status_vps'), Markup.button.callback('🚀 Speedtest', 'speedtest_run')],
-    [Markup.button.callback('📦 Deploy App', 'start_deploy'), Markup.button.callback('ℹ️ System Info', 'status_sys')],
-    [Markup.button.callback('� Update Apps', 'list_updates'), Markup.button.callback('✨ Fitur Lainnya', 'show_more_menu')]
+    [Markup.button.callback('📊 Status VPS', 'status_vps'), Markup.button.callback('� List Apps', 'list_apps')],
+    [Markup.button.callback('� Speedtest', 'speedtest_run'), Markup.button.callback('📦 Deploy App', 'start_deploy')],
+    [Markup.button.callback('✨ Menu Lengkap & Tools', 'show_more_menu')]
 ]);
 
 const moreMenu = Markup.inlineKeyboard([
-    [Markup.button.callback('💾 Disk Space', 'status_disk'), Markup.button.callback('🌐 Network', 'status_net')],
-    [Markup.button.callback('📂 List Apps', 'list_apps'), Markup.button.callback('🔐 Login Monitor', 'login_monitor')],
-    [Markup.button.callback('🛡️ Firewall', 'status_ufw'), Markup.button.callback('📜 SSL Manager', 'status_ssl')],
-    [Markup.button.callback('🌐 Domain & SSL Check', 'list_domains')],
-    [Markup.button.callback('🗄️ Database', 'status_db'), Markup.button.callback('🐳 Docker', 'status_docker')],
-    [Markup.button.callback('📝 PM2 Logs', 'list_pm2_logs'), Markup.button.callback('🔄 System Update', 'sys_update')],
-    [Markup.button.callback('📈 Top Processes', 'status_top'), Markup.button.callback('⚡ Server Actions', 'server_menu')],
-    [Markup.button.callback('🗑️ Delete App', 'delete_menu'), Markup.button.callback('📂 File Manager', 'file_manager')],
-    [Markup.button.callback('📸 Screenshot Web', 'start_screenshot'), Markup.button.callback('📦 Backup App', 'backup_menu')],
-    [Markup.button.callback('💻 Terminal', 'start_shell'), Markup.button.callback('⬅️ Kembali ke Menu Utama', 'back_to_main')],
-    [Markup.button.callback('❓ Help', 'help_msg')]
+    // Monitoring Section
+    [Markup.button.callback('💾 Disk', 'status_disk'), Markup.button.callback('🌐 Net', 'status_net'), Markup.button.callback('� Top CPU', 'status_top')],
+    
+    // App Management Section
+    [Markup.button.callback('� Update Apps', 'list_updates'), Markup.button.callback('� PM2 Logs', 'list_pm2_logs'), Markup.button.callback('�️ Delete App', 'delete_menu')],
+    
+    // Server & Security Section
+    [Markup.button.callback('🔐 Login Check', 'login_monitor'), Markup.button.callback('�️ Firewall', 'status_ufw'), Markup.button.callback('� SSL Certs', 'status_ssl')],
+    
+    // Tools Section
+    [Markup.button.callback('�️ Database', 'status_db'), Markup.button.callback('� Docker', 'status_docker'), Markup.button.callback('� Files', 'file_manager')],
+    
+    // Actions Section
+    [Markup.button.callback('📸 Screenshot', 'start_screenshot'), Markup.button.callback('� Backup', 'backup_menu'), Markup.button.callback('� Terminal', 'start_shell')],
+    
+    // System Section
+    [Markup.button.callback('🌐 Cek Domain', 'list_domains'), Markup.button.callback('ℹ️ Sys Info', 'status_sys'), Markup.button.callback('⚡ Reboot', 'server_menu')],
+    
+    // Footer
+    [Markup.button.callback('⬅️ Back to Main', 'back_to_main'), Markup.button.callback('🔄 Sys Update', 'sys_update')]
 ]);
 
 bot.start((ctx) => {
@@ -988,10 +997,26 @@ bot.command('ssl_renew', (ctx) => {
 bot.action('list_domains', async (ctx) => {
     await ctx.editMessageText('🌐 *DOMAIN & SSL CHECKER*\n\nSedang memindai Nginx configs...', { parse_mode: 'Markdown' });
 
+    // Check if Nginx directory exists
+    if (!fs.existsSync(NGINX_ENABLED)) {
+        return ctx.editMessageText('❌ Nginx tidak terdeteksi.\nFolder `/etc/nginx/sites-enabled` tidak ditemukan.', {
+            ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+        });
+    }
+
     // 1. Scan Nginx enabled sites to get domains
+    // Use grep -r to find server_name directives
     shell.exec(`grep -r "server_name" ${NGINX_ENABLED}`, { silent: true }, async (code, stdout, stderr) => {
-        if (code !== 0) {
-            return ctx.editMessageText('❌ Gagal membaca Nginx configs.', {
+        // grep returns exit code 1 if no matches found, which is NOT an error for us.
+        // Only treat code > 1 as error (e.g. permission denied)
+        if (code > 1) {
+            return ctx.editMessageText(`❌ Gagal membaca Nginx configs.\nError: ${stderr}`, {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+            });
+        }
+
+        if (code === 1 || !stdout) {
+             return ctx.editMessageText('📭 Tidak ada domain yang ditemukan di Nginx.', {
                 ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
             });
         }
@@ -1010,7 +1035,8 @@ bot.action('list_domains', async (ctx) => {
                     // Handle multiple domains in one line "example.com www.example.com"
                     const ds = d.split(/\s+/);
                     ds.forEach(domain => {
-                        if (domain && domain !== '_' && !domains.includes(domain)) {
+                        // Filter out localhost, IP addresses, catch-all _, and duplicates
+                        if (domain && domain !== '_' && domain !== 'localhost' && !domains.includes(domain) && !domain.match(/^\d+\.\d+\.\d+\.\d+$/)) {
                             domains.push(domain);
                         }
                     });
@@ -1019,7 +1045,7 @@ bot.action('list_domains', async (ctx) => {
         });
 
         if (domains.length === 0) {
-            return ctx.editMessageText('📭 Tidak ada domain yang ditemukan di Nginx.', {
+            return ctx.editMessageText('📭 Tidak ada domain valid yang ditemukan.', {
                 ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
             });
         }
