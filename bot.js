@@ -519,6 +519,7 @@ const moreMenu = Markup.inlineKeyboard([
     [Markup.button.callback('💾 Disk Space', 'status_disk'), Markup.button.callback('🌐 Network', 'status_net')],
     [Markup.button.callback('📂 List Apps', 'list_apps'), Markup.button.callback('🔐 Login Monitor', 'login_monitor')],
     [Markup.button.callback('🛡️ Firewall', 'status_ufw'), Markup.button.callback('📜 SSL Manager', 'status_ssl')],
+    [Markup.button.callback('🌐 Domain & SSL Check', 'list_domains')],
     [Markup.button.callback('🗄️ Database', 'status_db'), Markup.button.callback('🐳 Docker', 'status_docker')],
     [Markup.button.callback('📝 PM2 Logs', 'list_pm2_logs'), Markup.button.callback('🔄 System Update', 'sys_update')],
     [Markup.button.callback('📈 Top Processes', 'status_top'), Markup.button.callback('⚡ Server Actions', 'server_menu')],
@@ -980,6 +981,91 @@ bot.command('ssl_renew', (ctx) => {
                 ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali ke Menu', 'back_to_main')]])
             });
         }
+    });
+});
+
+// --- Domain & SSL Status Checker ---
+bot.action('list_domains', async (ctx) => {
+    await ctx.editMessageText('🌐 *DOMAIN & SSL CHECKER*\n\nSedang memindai Nginx configs...', { parse_mode: 'Markdown' });
+
+    // 1. Scan Nginx enabled sites to get domains
+    shell.exec(`grep -r "server_name" ${NGINX_ENABLED}`, { silent: true }, async (code, stdout, stderr) => {
+        if (code !== 0) {
+            return ctx.editMessageText('❌ Gagal membaca Nginx configs.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+            });
+        }
+
+        // Parse domains
+        const lines = stdout.split('\n');
+        const domains = [];
+        
+        lines.forEach(line => {
+            // format: /etc/nginx/sites-enabled/myapp:    server_name myapp.com;
+            if (line.includes('server_name')) {
+                const parts = line.split('server_name');
+                if (parts[1]) {
+                    let d = parts[1].trim();
+                    if (d.endsWith(';')) d = d.slice(0, -1); // remove semicolon
+                    // Handle multiple domains in one line "example.com www.example.com"
+                    const ds = d.split(/\s+/);
+                    ds.forEach(domain => {
+                        if (domain && domain !== '_' && !domains.includes(domain)) {
+                            domains.push(domain);
+                        }
+                    });
+                }
+            }
+        });
+
+        if (domains.length === 0) {
+            return ctx.editMessageText('📭 Tidak ada domain yang ditemukan di Nginx.', {
+                ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Kembali', 'show_more_menu')]])
+            });
+        }
+
+        await ctx.editMessageText(`🔎 Ditemukan ${domains.length} domain.\nSedang mengecek status SSL satu per satu...`, { parse_mode: 'Markdown' });
+
+        let report = '🌐 *DOMAIN STATUS REPORT*\n\n';
+        
+        for (const domain of domains) {
+            // Use simple curl without --max-time first for HTTP
+            const checkHttp = shell.exec(`curl -s -o /dev/null -w "%{http_code}" http://${domain}`, { silent: true }).stdout;
+            
+            // Check HTTPS (SSL) with 5s timeout
+            // Using -I to fetch headers only is faster
+            const checkHttps = shell.exec(`curl -s -o /dev/null -I -w "%{http_code}" --max-time 5 https://${domain}`, { silent: true });
+            
+            let status = '';
+            let icon = '';
+            
+            // Check if HTTPS returns valid status (200, 301, 302, 404 etc)
+            // If code is 000, it means connection failed (SSL error or timeout)
+            if (checkHttps.code === 0 && checkHttps.stdout !== '000') {
+                icon = '🔒'; // SSL OK
+                status = `SSL Active (Code: ${checkHttps.stdout})`;
+            } else if (checkHttp === '000') {
+                 icon = '💀'; // Down
+                 status = 'Unreachable / DNS Error';
+            } else {
+                 icon = '🔓'; // No SSL or Error
+                 status = 'No SSL / Certificate Error';
+            }
+
+            report += `${icon} *${domain}*\n`;
+            report += `   └ ${status}\n\n`;
+        }
+
+        // Send Report
+        if (report.length > 4000) report = report.substring(0, 4000) + '...';
+        
+        ctx.editMessageText(report, { 
+            parse_mode: 'Markdown',
+            ...Markup.inlineKeyboard([
+                [Markup.button.callback('🔄 Refresh', 'list_domains')],
+                [Markup.button.callback('⬅️ Kembali', 'show_more_menu')]
+            ])
+        });
     });
 });
 
