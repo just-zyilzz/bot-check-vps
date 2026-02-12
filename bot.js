@@ -11,7 +11,14 @@ const { execSync, exec } = require('child_process');
 // Configuration
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const VPS_IP = process.env.VPS_IP;
-const AUTHORIZED_USERS = [parseInt(process.env.AUTHORIZED_USER)]; // Load from env
+const AUTHORIZED_USERS = (process.env.AUTHORIZED_USER || '')
+    .split(',')
+    .map(id => parseInt(id.trim()))
+    .filter(id => !isNaN(id));
+
+if (AUTHORIZED_USERS.length === 0) {
+    console.warn('⚠️ Warning: No valid AUTHORIZED_USER found in .env');
+}
 
 // App Directories
 const APPS_DIR = '/var/www';
@@ -458,11 +465,27 @@ bot.use(stage.middleware());
 
 // Middleware for Authorization
 const authMiddleware = (ctx, next) => {
+    // Check if user info is available
+    if (!ctx.from || !ctx.from.id) {
+        // Some updates like channel_post might not have 'from'
+        return; 
+    }
+
     const userId = ctx.from.id;
+    
+    // Check if AUTHORIZED_USERS contains valid numbers
+    if (AUTHORIZED_USERS.some(id => isNaN(id))) {
+        console.error('⚠️ Configuration Error: AUTHORIZED_USER env contains invalid number');
+        return ctx.reply('⚠️ System Error: Invalid Authorization Configuration');
+    }
+
     if (AUTHORIZED_USERS.includes(userId)) {
         return next();
     }
-    return ctx.reply('⛔ Unauthorized access. Please contact admin.');
+    
+    // Silent fail for unauthorized users to avoid spamming them
+    // or reply once
+    // return ctx.reply('⛔ Unauthorized access. Please contact admin.');
 };
 
 bot.use(authMiddleware);
