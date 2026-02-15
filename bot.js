@@ -264,6 +264,10 @@ server {
             fs.writeFileSync(configPath, nginxConfig);
             shell.exec(`ln -s ${configPath} ${enabledPath}`);
 
+            // Fix server_names_hash_bucket_size to avoid Nginx reload errors
+            shell.exec("sudo sed -i 's/# server_names_hash_bucket_size 64;/server_names_hash_bucket_size 128;/' /etc/nginx/nginx.conf", { silent: true });
+            shell.exec("sudo sed -i 's/server_names_hash_bucket_size 64;/server_names_hash_bucket_size 128;/' /etc/nginx/nginx.conf", { silent: true });
+
             const nginxReload = shell.exec('sudo systemctl reload nginx');
             if (nginxReload.code !== 0) {
                 await updateStatus('⚠️ Nginx reload failed. Cek config manual.');
