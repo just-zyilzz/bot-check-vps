@@ -61,29 +61,29 @@ const getAvailablePort = async (startPort = 3000) => {
 // --- WIZARD SCENE FOR DEPLOYMENT ---
 const deployWizard = new Scenes.WizardScene(
     'deploy_wizard',
-    // Step 1: Ask for Repo URL
+    // Step 0: Ask for Repo URL
     (ctx) => {
         ctx.reply('🚀 *DEPLOYMENT WIZARD*\n\nSilakan kirimkan *Link Repository GitHub* Anda.\n(Contoh: https://github.com/user/my-app.git)', { parse_mode: 'Markdown' });
         ctx.wizard.state.data = {};
         return ctx.wizard.next();
     },
-    // Step 2: Ask for App Name
+    // Step 1: Ask for App Name
     (ctx) => {
         if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan link valid.');
         const repo = ctx.message.text.trim();
 
         // Validation
-        if (!repo.startsWith('http') && !repo.startsWith('git@')) {
+        if (!repo.startsWith('http') && !repo.startsWith('git@') && !repo.startsWith('https')) {
             return ctx.reply('⚠️ Link tidak valid. Gunakan format HTTPS atau SSH (git@...).');
         }
 
         ctx.wizard.state.data.repo = repo;
 
-        ctx.reply('📝 *Nama Aplikasi*\n\nBerikan nama untuk aplikasi ini (tanpa spasi).\n(Contoh: my-api)', { parse_mode: 'Markdown' });
+        ctx.reply('📝 *Nama Aplikasi*\n\nBerikan nama untuk aplikasi ini (tanpa spasi, unik).\n(Contoh: my-api)', { parse_mode: 'Markdown' });
         return ctx.wizard.next();
     },
-    // Step 3: Ask for Domain Preference
-    (ctx) => {
+    // Step 2: Clone, Detect, and Decide next step
+    async (ctx) => {
         if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan nama valid.');
         const name = ctx.message.text.trim().replace(/\s+/g, '-').toLowerCase();
 
@@ -94,14 +94,87 @@ const deployWizard = new Scenes.WizardScene(
         }
 
         ctx.wizard.state.data.name = name;
+        const repo = ctx.wizard.state.data.repo;
+        const appPath = path.join(APPS_DIR, name);
 
-        // Ask about domain
-        ctx.reply('🌐 *Pengaturan Domain*\n\nApakah Anda memiliki domain sendiri?\n\n- **Ya**: Gunakan domain custom (cth: `myapp.com`).\n- **Tidak**: Gunakan auto domain (cth: `myapp.ip.nip.io`).',
-            Markup.keyboard([['✅ Ya, Punya', '❌ Tidak, Pakai Auto (nip.io)']]).oneTime().resize()
-        );
-        return ctx.wizard.next();
+        // Notify user analysis is starting
+        const statusMsg = await ctx.reply(`🔄 Cloning & Analyzing *${name}*...`, { parse_mode: 'Markdown' });
+
+        // 1. CLONE REPO
+        if (fs.existsSync(appPath)) shell.rm('-rf', appPath); // Safety clear
+        const cloneRes = shell.exec(`git clone ${repo} ${appPath}`, { silent: true });
+
+        if (cloneRes.code !== 0) {
+            ctx.reply(`❌ *Clone Failed!*\n\n\`${cloneRes.stderr}\``, { parse_mode: 'Markdown' });
+            return ctx.scene.leave();
+        }
+
+        // 2. DETECT APP TYPE & WEB REQUIREMENT
+        let appType = 'unknown';
+        let needsWeb = false; // Default to background service
+
+        // Check Docker
+        if (fs.existsSync(path.join(appPath, 'docker-compose.yml'))) {
+            appType = 'docker-compose';
+            needsWeb = true; // Assume Docker apps usually expose something
+        } else if (fs.existsSync(path.join(appPath, 'Dockerfile'))) {
+            appType = 'docker';
+            needsWeb = true;
+        }
+        // Check Node.js
+        else if (fs.existsSync(path.join(appPath, 'package.json'))) {
+            appType = 'node';
+            const pkg = require(path.join(appPath, 'package.json'));
+            const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+            // Check for web frameworks
+            const webFrameworks = ['express', 'fastify', 'koa', 'next', 'nuxt', 'react', 'vue', 'svelte', 'vite', 'socket.io', 'restify', 'nest.js', '@nestjs/core', 'http-server'];
+            if (webFrameworks.some(f => deps && deps[f])) {
+                needsWeb = true;
+            }
+        }
+        // Check Python
+        else if (fs.existsSync(path.join(appPath, 'requirements.txt')) || fs.existsSync(path.join(appPath, 'main.py')) || fs.existsSync(path.join(appPath, 'app.py'))) {
+            appType = 'python';
+            // Check content of requirements.txt for web frameworks
+            if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
+                const reqs = fs.readFileSync(path.join(appPath, 'requirements.txt'), 'utf8').toLowerCase();
+                const pyWebFrameworks = ['flask', 'django', 'fastapi', 'tornado', 'aiohttp', 'streamlit', 'sanic', 'bottle'];
+                if (pyWebFrameworks.some(f => reqs.includes(f))) {
+                    needsWeb = true;
+                }
+            }
+            // Also check main file imports if needed, but requirements is usually enough.
+            // If main.py has 'from flask' etc.
+        }
+        // Check PHP
+        else if (fs.existsSync(path.join(appPath, 'index.php')) || fs.existsSync(path.join(appPath, 'composer.json'))) {
+            appType = 'php';
+            needsWeb = true; // PHP is almost always web
+        }
+        // Check Static
+        else if (fs.existsSync(path.join(appPath, 'index.html'))) {
+            appType = 'static';
+            needsWeb = true;
+        }
+
+        ctx.wizard.state.data.appType = appType;
+        ctx.wizard.state.data.needsWeb = needsWeb;
+
+        await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id);
+
+        if (needsWeb) {
+            ctx.reply(`✅ *Web App Detected* (${appType.toUpperCase()})\n\nProyek ini terdeteksi membutuhkan akses web.\n\nApakah Anda memiliki domain sendiri?\n\n- **Ya**: Gunakan domain custom (cth: \`myapp.com\`).\n- **Tidak**: Gunakan auto domain (cth: \`${name}.${VPS_IP}.nip.io\`).`,
+                Markup.keyboard([['✅ Ya, Punya', '❌ Tidak, Pakai Auto (nip.io)']]).oneTime().resize()
+            );
+            return ctx.wizard.next(); // Go to Step 3 (Domain Pref)
+        } else {
+            ctx.reply(`🤖 *Background App Detected* (${appType.toUpperCase()})\n\nProyek ini terdeteksi sebagai bot/worker. Web access & SSL akan dilewati.`, Markup.removeKeyboard());
+            // Skip Step 3 and 4, go directly to Step 5 (Execute)
+            ctx.wizard.selectStep(5);
+            return ctx.wizard.steps[5](ctx);
+        }
     },
-    // Step 4: Handle Domain Input
+    // Step 3: Handle Domain Preference (Only if needsWeb)
     (ctx) => {
         if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Silakan pilih Ya atau Tidak.');
         const answer = ctx.message.text;
@@ -111,146 +184,125 @@ const deployWizard = new Scenes.WizardScene(
             ctx.wizard.state.data.domain_mode = 'auto';
             ctx.reply('✅ Menggunakan **Auto Domain** (nip.io).', { parse_mode: 'Markdown', ...Markup.removeKeyboard() });
 
-            // Skip next step (custom domain input)
-            ctx.wizard.selectStep(4);
-            return ctx.wizard.steps[4](ctx);
+            // Skip custom domain input (Step 4), go to Step 5
+            ctx.wizard.selectStep(5);
+            return ctx.wizard.steps[5](ctx);
         } else {
             // Custom Domain
             ctx.wizard.state.data.domain_mode = 'custom';
-            ctx.reply('📝 *Masukkan Nama Domain Anda*\n\nPastikan Anda sudah membuat **A Record** di DNS Manager yang mengarah ke IP VPS ini.\n\nContoh: `myapp.com` atau `api.mysite.com`', { parse_mode: 'Markdown', ...Markup.removeKeyboard() });
-            return ctx.wizard.next();
+            ctx.reply('📝 *Masukkan Nama Domain Anda*\n\nPastikan Anda sudah membuat **A Record** di DNS Manager yang mengarah ke IP VPS ini.\n\nContoh: `myapp.com`', { parse_mode: 'Markdown', ...Markup.removeKeyboard() });
+            return ctx.wizard.next(); // Go to Step 4
         }
     },
-    // Step 5: Get Custom Domain & Execute
+    // Step 4: Get Custom Domain
     (ctx) => {
         if (ctx.wizard.state.data.domain_mode === 'custom') {
             if (!ctx.message || !ctx.message.text) return ctx.reply('⚠️ Harap kirimkan nama domain valid.');
             const domain = ctx.message.text.trim().toLowerCase();
-            // Simple regex validation
             if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
                 return ctx.reply('⚠️ Format domain tidak valid. Contoh: `example.com`');
             }
             ctx.wizard.state.data.domain = domain;
         }
-
-        return ctx.wizard.steps[5](ctx); // Go to actual deployment step (index 5)
+        return ctx.wizard.steps[5](ctx); // Execute
     },
-    // Step 6: Deployment Process
+    // Step 5: Final Deployment Execution
     async (ctx) => {
-        // Remove keyboard just in case
+        const { name, appType, needsWeb } = ctx.wizard.state.data;
+        const appPath = path.join(APPS_DIR, name);
 
-        const { name, repo } = ctx.wizard.state.data;
-
-        // AUTO PORT DETECTION
-        const statusMsg = await ctx.reply('🔍 Mencari port yang tersedia...', Markup.removeKeyboard());
-
-        // Helper to update status
+        // Status Message Helper
+        const statusMsg = await ctx.reply('⚙️ Mengonfigurasi & Menjalankan Aplikasi...', Markup.removeKeyboard());
         const updateStatus = async (text) => {
             try {
                 await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, null, text, { parse_mode: 'Markdown' });
-            } catch (e) {
-                // Ignore if message not modified
-            }
+            } catch (e) { }
         };
 
-        const port = await getAvailablePort(3000);
-        ctx.wizard.state.data.port = port;
-
-        // Determine Domain
-        let domain = '';
-        if (ctx.wizard.state.data.domain_mode === 'custom') {
-            domain = ctx.wizard.state.data.domain;
-        } else {
-            domain = `${name}.${VPS_IP}.nip.io`;
-        }
-
-        // Start Deployment Process
-        await updateStatus(`⚙️ *Memulai Deployment...*\n\n📦 App: ${name}\n🔗 Repo: ${repo}\n🌐 Domain: ${domain}\n🔌 Port: ${port}`);
-
-        const appPath = path.join(APPS_DIR, name);
-
         try {
-            // 1. Clone
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n📥 Cloning repository...`);
-            const cloneRes = shell.exec(`git clone ${repo} ${appPath}`, { silent: true });
-            if (cloneRes.code !== 0) {
-                throw new Error(`Git Clone Failed:\n${cloneRes.stderr}`);
-            }
+            // 1. Prepare Port
+            const port = await getAvailablePort(3000);
+            ctx.wizard.state.data.port = port;
 
-            // 2. Detect App Type & Install Dependencies
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔍 Detecting application type...`);
+            // 2. Install & Start Logic
+            await updateStatus(`⚙️ *Deployment: ${name}*\n\n📦 Installing dependencies for ${appType.toUpperCase()}...`);
 
-            let isStatic = false;
-            let script = 'index.js';
-            const pkgPath = path.join(appPath, 'package.json');
+            let startCmd = '';
 
-            if (fs.existsSync(pkgPath)) {
-                const pkg = require(pkgPath);
-                script = pkg.main || 'index.js';
-                if (pkg.scripts && pkg.scripts.start) script = 'npm -- start';
-            }
+            if (appType === 'node') {
+                const pkg = require(path.join(appPath, 'package.json'));
+                const script = pkg.main || 'index.js';
+                shell.exec(`cd ${appPath} && npm install`, { silent: true });
+                startCmd = `cd ${appPath} && PORT=${port} pm2 start ${pkg.scripts?.start ? 'npm -- start' : script} --name ${name}`;
 
-            // Check if the script exists
-            const scriptPath = script.includes('npm --') ? pkgPath : path.join(appPath, script);
-            if (!fs.existsSync(scriptPath) && !script.includes('npm --')) {
-                isStatic = true;
-            }
-
-            if (!isStatic) {
-                await updateStatus(`⚙️ *Deployment: ${name}*\n\n📦 Installing dependencies...`);
-                let installCmd = '';
-
-                if (fs.existsSync(pkgPath)) {
-                    installCmd = `cd ${appPath} && npm install`;
-                } else if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
-                    installCmd = `cd ${appPath} && pip install -r requirements.txt`;
+            } else if (appType === 'python') {
+                if (fs.existsSync(path.join(appPath, 'requirements.txt'))) {
+                    shell.exec(`cd ${appPath} && pip install -r requirements.txt`, { silent: true });
                 }
+                let mainScript = 'app.py';
+                ['main.py', 'server.py', 'bot.py', 'manage.py'].forEach(f => {
+                    if (fs.existsSync(path.join(appPath, f))) mainScript = f;
+                });
+                // If web, pass port? Flask usually defaults 5000. 
+                // We'll try to pass PORT env var.
+                startCmd = `cd ${appPath} && PORT=${port} pm2 start python3 --name ${name} -- ${mainScript}`;
 
-                if (installCmd) {
-                    const installRes = shell.exec(installCmd, { silent: true });
-                    if (installRes.code !== 0) {
-                        throw new Error(`Install Failed:\n${installRes.stderr.substring(0, 500)}...`);
-                    }
+            } else if (appType === 'php') {
+                if (fs.existsSync(path.join(appPath, 'composer.json'))) {
+                    if (!shell.which('composer')) shell.exec('apt install composer -y', { silent: true });
+                    shell.exec(`cd ${appPath} && composer install`, { silent: true });
                 }
+                startCmd = `cd ${appPath} && pm2 start php --name ${name} -- -S 0.0.0.0:${port} -t .`;
 
-                // 3. Start PM2 (Backend)
-                await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔥 Starting backend process...`);
-                const startCmd = `cd ${appPath} && PORT=${port} pm2 start ${script} --name ${name}`;
-                const startRes = shell.exec(startCmd, { silent: true });
-                if (startRes.code !== 0) {
-                    throw new Error(`PM2 Start Failed:\n${startRes.stderr}`);
-                }
+            } else if (appType === 'docker') {
+                const buildRes = shell.exec(`cd ${appPath} && docker build -t ${name} .`, { silent: true });
+                if (buildRes.code !== 0) throw new Error('Docker Build Failed');
+                startCmd = `docker run -d -p ${port}:80 --name ${name}_container ${name}`;
+
+            } else if (appType === 'docker-compose') {
+                startCmd = `cd ${appPath} && docker-compose up -d --build`;
+
+            } else if (appType === 'static') {
+                if (!shell.which('serve')) shell.exec('npm install -g serve', { silent: true });
+                startCmd = `pm2 start serve --name ${name} -- -s ${appPath} -l ${port}`;
             } else {
-                // 3. Start PM2 (Static)
-                await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Starting static web server...`);
-
-                if (!shell.which('serve')) {
-                    shell.exec('npm install -g serve', { silent: true });
-                }
-
-                const staticCmd = `pm2 start serve --name ${name} -- -s ${appPath} -l ${port}`;
-                const staticRes = shell.exec(staticCmd, { silent: true });
-                if (staticRes.code !== 0) {
-                    throw new Error(`Static Deploy Failed:\n${staticRes.stderr}`);
-                }
+                await updateStatus('⚠️ Unknown Type. Trying Node.js default...');
+                shell.exec(`cd ${appPath} && npm install`, { silent: true });
+                startCmd = `cd ${appPath} && PORT=${port} pm2 start index.js --name ${name}`;
             }
-            shell.exec('pm2 save');
 
-            // 4. Setup Nginx & SSL
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Configuring Nginx & SSL...`);
+            // Execute Start
+            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔥 Starting application...`);
+            let execRes = shell.exec(startCmd, { silent: true });
 
-            // Clean up old configs first
-            const configPath = path.join(NGINX_AVAILABLE, name);
-            const enabledPath = path.join(NGINX_ENABLED, name);
-            if (fs.existsSync(configPath)) shell.rm(configPath);
-            if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
+            if (execRes.code !== 0) {
+                throw new Error(`Start Failed: ${execRes.stderr}`);
+            }
+            if (!appType.includes('docker')) shell.exec('pm2 save');
 
-            // Nginx Config for HTTP (Port 80)
-            const nginxConfig = `
-server {
+            // 3. Setup Web Access (Nginx + SSL)
+            let validUrl = '(Background Service)';
+            let sslStatus = 'Skipped';
+
+            if (needsWeb && !appType.includes('docker-compose')) {
+                // Docker-compose handles its own ports usually, strict mapping is hard without parsing yaml.
+                // Assuming others obey 'port' or we mapped 'port:80' for docker run.
+
+                let domain = '';
+                if (ctx.wizard.state.data.domain_mode === 'custom') {
+                    domain = ctx.wizard.state.data.domain;
+                } else {
+                    domain = `${name}.${VPS_IP}.nip.io`;
+                }
+
+                await updateStatus(`⚙️ *Deployment: ${name}*\n\n🌐 Configuring Nginx & SSL for ${domain}...`);
+
+                const configPath = path.join(NGINX_AVAILABLE, name);
+                const enabledPath = path.join(NGINX_ENABLED, name);
+
+                const nginxConfig = `server {
     listen 80;
     server_name ${domain};
-
     location / {
         proxy_pass http://localhost:${port};
         proxy_http_version 1.1;
@@ -259,52 +311,38 @@ server {
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
     }
-}
-`;
-            fs.writeFileSync(configPath, nginxConfig);
-            shell.exec(`ln -s ${configPath} ${enabledPath}`);
+}`;
+                fs.writeFileSync(configPath, nginxConfig);
+                if (fs.existsSync(enabledPath)) shell.rm(enabledPath);
+                shell.exec(`ln -s ${configPath} ${enabledPath}`);
+                shell.exec('sudo systemctl reload nginx');
 
-            // Fix server_names_hash_bucket_size to avoid Nginx reload errors
-            shell.exec("sudo sed -i 's/# server_names_hash_bucket_size 64;/server_names_hash_bucket_size 128;/' /etc/nginx/nginx.conf", { silent: true });
-            shell.exec("sudo sed -i 's/server_names_hash_bucket_size 64;/server_names_hash_bucket_size 128;/' /etc/nginx/nginx.conf", { silent: true });
-
-            const nginxReload = shell.exec('sudo systemctl reload nginx');
-            if (nginxReload.code !== 0) {
-                await updateStatus('⚠️ Nginx reload failed. Cek config manual.');
+                // Certbot
+                if (shell.which('certbot')) {
+                    const certRes = shell.exec(`sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --redirect -m admin@${domain}`, { silent: true });
+                    sslStatus = (certRes.code === 0) ? '✅ Secured' : '⚠️ Failed';
+                    validUrl = `https://${domain}`;
+                } else {
+                    validUrl = `http://${domain}`;
+                    sslStatus = '❌ Certbot Missing';
+                }
             }
 
-            // 5. Auto SSL with Certbot
-            await updateStatus(`⚙️ *Deployment: ${name}*\n\n🔒 Requesting SSL Certificate...`);
+            await updateStatus(`✅ *DEPLOYMENT SUCCESS!* 🎉
+            
+📦 App: ${name}
+🧬 Type: ${appType.toUpperCase()}
+🔌 Port: ${port}
+🌍 URL: ${validUrl}
+🔐 SSL: ${sslStatus}
 
-            // Check if certbot is installed
-            if (!shell.which('certbot')) {
-                await updateStatus('⚠️ Certbot tidak ditemukan. Menginstall certbot...');
-                shell.exec('sudo apt-get install certbot python3-certbot-nginx -y', { silent: true });
-            }
-
-            // Run Certbot
-            const certCmd = `sudo certbot --nginx -d ${domain} --non-interactive --agree-tos --redirect -m admin@${domain}`;
-            const certRes = shell.exec(certCmd, { silent: true });
-
-            let finalUrl = `http://${domain}`;
-            let sslStatus = '❌ SSL Failed';
-
-            if (certRes.code === 0) {
-                finalUrl = `https://${domain}`;
-                sslStatus = '✅ SSL Secured';
-            } else {
-                console.error('Certbot Error:', certRes.stderr);
-                sslStatus = '⚠️ SSL Failed (Check Logs)';
-            }
-
-            await updateStatus(`✅ *DEPLOYMENT SUCCESS!* 🎉\n\n🌍 URL: ${finalUrl}\n🔒 Status: ${sslStatus}\n🔌 Port: ${port}`);
+_Tips: Gunakan /logs ${name} untuk melihat status aplikasi._`);
 
         } catch (err) {
             console.error(err);
-            // Cleanup: remove folder if failed
-            if (fs.existsSync(appPath)) shell.rm('-rf', appPath);
-
-            await updateStatus(`❌ *DEPLOYMENT GAGAL!* 😭\n\nError Detail:\n\`${err.message}\`\n\nFolder aplikasi telah dibersihkan. Silakan coba lagi.`);
+            await updateStatus(`❌ *DEPLOYMENT GAGAL!*
+Error: ${err.message}
+Cek logs untuk detail.`);
         }
 
         return ctx.scene.leave();
